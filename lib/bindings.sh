@@ -111,7 +111,7 @@ bindings_write_managed() {
   local bindings_file="$1"
   local key="$2"
   local previous_action="${3:-}"
-  local trigger_path="$4"
+  local trigger_path="${4:-}"
   local voxtype_keys="${5:-$key}" managed_key selected_unbound=false temporary clean
 
   [[ "$key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
@@ -137,18 +137,16 @@ bindings_write_managed() {
     if [[ -n "$previous_action" ]]; then
       printf '%s\n' "-- Previous action: ${previous_action//$'\n'/ }"
     fi
+    printf '%s\n' "-- Dictation push-to-talk is $key via Handy's native evdev hotkey (handy_keys)."
     while IFS= read -r managed_key; do
       [[ -n "$managed_key" ]] || continue
       [[ "$managed_key" == "$key" ]] && selected_unbound=true
       printf 'hl.unbind("%s")\n' "$managed_key"
     done <<<"$voxtype_keys"
     [[ "$selected_unbound" == true ]] || printf 'hl.unbind("%s")\n' "$key"
-    printf '\n'
-    printf 'o.bind(\n  "%s",\n  "Start Handy dictation",\n  "%s press"\n)\n\n' "$key" "$trigger_path"
-    printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$key" "$trigger_path"
     printf '%s\n' "$HANDY_BINDINGS_END"
   } >>"$temporary"
 
-  chmod --reference="$bindings_file" "$temporary"
+  chmod --reference="$bindings_file" "$temporary" 2>/dev/null || chmod 644 "$temporary"
   mv -- "$temporary" "$bindings_file"
 }

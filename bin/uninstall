@@ -64,6 +64,10 @@ fi
 rm -f -- "$INSTALL_FILE"
 restart_handy_if_needed
 
+if command -v omarchy >/dev/null 2>&1; then
+  omarchy restart shell >/dev/null 2>&1 || true
+fi
+
 if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null; then
   hyprctl reload >/dev/null
   errors="$(hyprctl configerrors)"

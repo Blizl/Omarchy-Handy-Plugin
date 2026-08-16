@@ -56,7 +56,13 @@ test_setup_uninstall_round_trip() {
   "$ROOT/bin/setup"
   "$ROOT/bin/setup" >/dev/null
   assert_file "$BLIZL_HANDY_STATE_DIR/install.json"
+  [[ "$(jq -r '.handyBinding' "$BLIZL_HANDY_STATE_DIR/install.json")" == 'alt+space' ]] || fail 'handyBinding not recorded in install.json'
+  [[ "$(jq -r '.settings.bindings.transcribe.current_binding' "$HANDY_SETTINGS_FILE")" == 'alt+space' ]] || fail 'Handy shortcut was not set'
+  [[ "$(jq -r '.settings.keyboard_implementation' "$HANDY_SETTINGS_FILE")" == 'handy_keys' ]] || fail 'handy_keys implementation not set'
+  [[ "$(jq -r '.settings.push_to_talk' "$HANDY_SETTINGS_FILE")" == 'true' ]] || fail 'push_to_talk not set to true'
   [[ "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$HYPR_BINDINGS_FILE")" == 1 ]] || fail 'managed block missing'
+  [[ "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$HYPR_BINDINGS_FILE")" == 1 ]] || fail 'ALT + SPACE not unbound in Hyprland'
+  ! grep -Fq 'release = true' "$HYPR_BINDINGS_FILE" || fail 'found broken release = true binding in Hyprland'
   [[ "$(grep -Fc -- 'Exec=handy --start-hidden' "$HANDY_AUTOSTART_FILE")" == 1 ]] || fail 'autostart changed incorrectly'
   [[ "$(jq '[.bar.layout[][] | select(.id == "blizl.handy")] | length' "$OMARCHY_SHELL_FILE")" == 1 ]] || fail 'Handy widget was not installed in shell settings'
   ! jq -e '[.bar.layout[][] | select(.id == "omarchy.indicators") | (.items // [])[]] | any(. == "Dictation")' "$OMARCHY_SHELL_FILE" >/dev/null || fail 'built-in Dictation indicator remained'

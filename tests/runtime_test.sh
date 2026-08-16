@@ -78,14 +78,13 @@ EOF
   printf '0\n' >"$TOGGLE_COUNT"
   rm -f -- "$CANCELLED"
   rm -f -- "$HANDY_RUNNING"
-  unset HANDY_START_STATUS HANDY_TOGGLE_STATUS
-  unset WPCTL_STATUS HANDY_CHORD_WATCHER_BIN
+  unset HANDY_START_STATUS HANDY_TOGGLE_STATUS HANDY_CANCEL_STATUS WPCTL_STATUS
   chmod +x "$ROOT/bin/handy-trigger"
 }
 
 run_trigger() {
   set +e
-  "$ROOT/bin/handy-trigger" "$1"
+  "$ROOT/bin/handy-trigger" "$@"
   RUN_STATUS=$?
 }
 
@@ -152,276 +151,76 @@ EOF
   ! microphone_is_available
 }
 
-test_missing_press_then_release_never_toggles() {
+test_toggle_without_microphone_fails_and_notifies() {
   : >"$WPCTL_FIXTURE"
-  run_trigger press
+  run_trigger toggle
   assert_status 2 "$RUN_STATUS" || return 1
-  run_trigger release
-  assert_status 0 "$RUN_STATUS" || return 1
   [[ $(<"$TOGGLE_COUNT") == 0 ]] || return 1
   grep -q 'Microphone not detected' "$NOTIFY_LOG"
 }
 
-test_press_and_release_toggle_once_each() {
+test_toggle_starts_handy_if_not_running() {
   microphone_fixture
-  run_trigger press
+  run_trigger toggle
   assert_status 0 "$RUN_STATUS" || return 1
-  [[ -f "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
-  [[ $(<"$TOGGLE_COUNT") == 1 ]] || return 1
-  run_trigger release
-  assert_status 0 "$RUN_STATUS" || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]]
-}
-
-test_duplicate_release_does_not_toggle_again() {
-  microphone_fixture
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  run_trigger release
-  assert_status 0 "$RUN_STATUS" || return 1
-  run_trigger release
-  assert_status 0 "$RUN_STATUS" || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]]
-}
-
-test_duplicate_press_does_not_toggle_twice() {
-  microphone_fixture
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
+  [[ -f "$HANDY_RUNNING" ]] || return 1
   [[ $(<"$TOGGLE_COUNT") == 1 ]]
 }
 
-test_stale_marker_is_reconciled() {
-  microphone_fixture
-  rm -f "$HANDY_RUNNING"
-  : >"$BLIZL_HANDY_RUNTIME_DIR/recording-armed"
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  [[ $(<"$TOGGLE_COUNT") == 1 ]]
-}
-
-test_parallel_press_only_toggles_once() {
-  microphone_fixture
-  "$ROOT/bin/handy-trigger" press &
-  first_pid=$!
-  "$ROOT/bin/handy-trigger" press &
-  second_pid=$!
-  wait "$first_pid"
-  first_status=$?
-  wait "$second_pid"
-  second_status=$?
-  [[ "$first_status" == 0 && "$second_status" == 0 ]] || return 1
-  [[ $(<"$TOGGLE_COUNT") == 1 ]]
-}
-
-test_start_failure_notifies_and_does_not_arm() {
+test_toggle_start_failure_notifies() {
   microphone_fixture
   HANDY_START_STATUS=1
   export HANDY_START_STATUS
-  run_trigger press
+  run_trigger toggle
   assert_status 1 "$RUN_STATUS" || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
   grep -q 'Handy could not start dictation' "$NOTIFY_LOG"
 }
 
-test_toggle_failure_notifies_and_does_not_arm() {
+test_toggle_transcription_failure_notifies() {
   microphone_fixture
   HANDY_TOGGLE_STATUS=1
   export HANDY_TOGGLE_STATUS
-  run_trigger press
+  run_trigger toggle
   assert_status 1 "$RUN_STATUS" || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
   grep -q 'Handy could not start dictation' "$NOTIFY_LOG"
 }
 
-test_release_failure_cancels_and_notifies() {
+test_stop_when_running_calls_transcribe() {
   microphone_fixture
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  HANDY_TOGGLE_STATUS=1
-  export HANDY_TOGGLE_STATUS
-  run_trigger release
-  assert_status 1 "$RUN_STATUS" || return 1
-  [[ -e "$CANCELLED" ]] || return 1
-  grep -q 'Handy could not finish dictation' "$NOTIFY_LOG"
-}
-
-test_stop_finishes_without_canceling() {
-  microphone_fixture
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  run_trigger stop
-  assert_status 0 "$RUN_STATUS" || return 1
-  [[ ! -e "$CANCELLED" ]] || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]] || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
-}
-
-test_stop_without_marker_still_toggles() {
-  microphone_fixture
+  : >"$HANDY_RUNNING"
   run_trigger stop
   assert_status 0 "$RUN_STATUS" || return 1
   [[ $(<"$TOGGLE_COUNT") == 1 ]] || return 1
-  [[ ! -e "$CANCELLED" ]] || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+  [[ ! -e "$CANCELLED" ]]
+}
+
+test_stop_when_not_running_is_noop() {
+  microphone_fixture
+  run_trigger stop
+  assert_status 0 "$RUN_STATUS" || return 1
+  [[ $(<"$TOGGLE_COUNT") == 0 ]]
 }
 
 test_stop_failure_cancels_and_notifies() {
   microphone_fixture
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
+  : >"$HANDY_RUNNING"
   HANDY_TOGGLE_STATUS=1
   export HANDY_TOGGLE_STATUS
   run_trigger stop
   assert_status 1 "$RUN_STATUS" || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
   [[ -e "$CANCELLED" ]] || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]] || return 1
   grep -q 'Handy could not finish dictation' "$NOTIFY_LOG"
 }
 
-test_press_spawns_watcher_and_records_pid() {
-  microphone_fixture
-  cat >"$FIXTURE/bin/mock-watcher" <<'EOF'
-#!/usr/bin/env bash
-trap 'exit 0' TERM INT
-while true; do sleep 1; done
-EOF
-  chmod +x "$FIXTURE/bin/mock-watcher"
-  export HANDY_CHORD_WATCHER_BIN="$FIXTURE/bin/mock-watcher"
-
-  run_trigger press
+test_notify_missing_mic_action() {
+  run_trigger notify-missing-mic
   assert_status 0 "$RUN_STATUS" || return 1
-  local pid_file="$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
-  [[ -f "$pid_file" ]] || return 1
-  local wpid
-  wpid="$(<"$pid_file")"
-  [[ "$wpid" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "$wpid" >/dev/null 2>&1 || return 1
-
-  kill "$wpid" >/dev/null 2>&1 || true
+  grep -q 'Microphone not detected' "$NOTIFY_LOG"
 }
 
-test_release_terminates_watcher_and_cleans_runtime_files() {
-  microphone_fixture
-  cat >"$FIXTURE/bin/mock-watcher" <<'EOF'
-#!/usr/bin/env bash
-trap 'exit 0' TERM INT
-while true; do sleep 1; done
-EOF
-  chmod +x "$FIXTURE/bin/mock-watcher"
-  export HANDY_CHORD_WATCHER_BIN="$FIXTURE/bin/mock-watcher"
-
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  local pid_file="$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
-  [[ -f "$pid_file" ]] || return 1
-  local wpid
-  wpid="$(<"$pid_file")"
-  kill -0 "$wpid" >/dev/null 2>&1 || return 1
-
-  run_trigger release
-  assert_status 0 "$RUN_STATUS" || return 1
-  [[ ! -e "$pid_file" ]] || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
-  for _ in {1..20}; do
-    kill -0 "$wpid" >/dev/null 2>&1 || break
-    sleep 0.05
-  done
-  ! kill -0 "$wpid" >/dev/null 2>&1 || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]]
-}
-
-test_stop_terminates_watcher_and_cleans_runtime_files() {
-  microphone_fixture
-  cat >"$FIXTURE/bin/mock-watcher" <<'EOF'
-#!/usr/bin/env bash
-trap 'exit 0' TERM INT
-while true; do sleep 1; done
-EOF
-  chmod +x "$FIXTURE/bin/mock-watcher"
-  export HANDY_CHORD_WATCHER_BIN="$FIXTURE/bin/mock-watcher"
-
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  local pid_file="$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
-  [[ -f "$pid_file" ]] || return 1
-  local wpid
-  wpid="$(<"$pid_file")"
-  kill -0 "$wpid" >/dev/null 2>&1 || return 1
-
-  run_trigger stop
-  assert_status 0 "$RUN_STATUS" || return 1
-  [[ ! -e "$pid_file" ]] || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
-  for _ in {1..20}; do
-    kill -0 "$wpid" >/dev/null 2>&1 || break
-    sleep 0.05
-  done
-  ! kill -0 "$wpid" >/dev/null 2>&1 || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]]
-}
-
-test_reconcile_stale_marker_terminates_orphan_watcher() {
-  microphone_fixture
-  sleep 60 &
-  local orphan_pid=$!
-  printf '%s\n' "$orphan_pid" >"$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
-  : >"$BLIZL_HANDY_RUNTIME_DIR/recording-armed"
-  rm -f "$HANDY_RUNNING"
-
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  for _ in {1..20}; do
-    kill -0 "$orphan_pid" >/dev/null 2>&1 || break
-    sleep 0.05
-  done
-  ! kill -0 "$orphan_pid" >/dev/null 2>&1 || {
-    kill "$orphan_pid" >/dev/null 2>&1 || true
-    return 1
-  }
-}
-
-test_reconcile_orphan_watcher_without_armed_marker() {
-  microphone_fixture
-  sleep 60 &
-  local orphan_pid=$!
-  printf '%s\n' "$orphan_pid" >"$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
-  rm -f "$BLIZL_HANDY_RUNTIME_DIR/recording-armed"
-
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-  ! kill -0 "$orphan_pid" >/dev/null 2>&1 || {
-    kill "$orphan_pid" >/dev/null 2>&1 || true
-    return 1
-  }
-}
-
-test_concurrent_watcher_and_release_binding_is_idempotent() {
-  microphone_fixture
-  run_trigger press
-  assert_status 0 "$RUN_STATUS" || return 1
-
-  "$ROOT/bin/handy-trigger" release &
-  local pid1=$!
-  "$ROOT/bin/handy-trigger" release &
-  local pid2=$!
-  "$ROOT/bin/handy-trigger" release &
-  local pid3=$!
-
-  wait "$pid1"
-  local s1=$?
-  wait "$pid2"
-  local s2=$?
-  wait "$pid3"
-  local s3=$?
-
-  [[ "$s1" == 0 && "$s2" == 0 && "$s3" == 0 ]] || return 1
-  [[ $(<"$TOGGLE_COUNT") == 2 ]] || return 1
-  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+test_invalid_action_exits_64() {
+  run_trigger invalid-action
+  assert_status 64 "$RUN_STATUS"
 }
 
 for test_name in \
@@ -431,24 +230,15 @@ for test_name in \
   test_wpctl_failure_is_rejected \
   test_dummy_microphone_is_rejected \
   test_monitor_microphone_is_rejected \
-  test_missing_press_then_release_never_toggles \
-  test_press_and_release_toggle_once_each \
-  test_duplicate_release_does_not_toggle_again \
-  test_duplicate_press_does_not_toggle_twice \
-  test_stale_marker_is_reconciled \
-  test_parallel_press_only_toggles_once \
-  test_start_failure_notifies_and_does_not_arm \
-  test_toggle_failure_notifies_and_does_not_arm \
-  test_release_failure_cancels_and_notifies \
-  test_stop_finishes_without_canceling \
-  test_stop_without_marker_still_toggles \
+  test_toggle_without_microphone_fails_and_notifies \
+  test_toggle_starts_handy_if_not_running \
+  test_toggle_start_failure_notifies \
+  test_toggle_transcription_failure_notifies \
+  test_stop_when_running_calls_transcribe \
+  test_stop_when_not_running_is_noop \
   test_stop_failure_cancels_and_notifies \
-  test_press_spawns_watcher_and_records_pid \
-  test_release_terminates_watcher_and_cleans_runtime_files \
-  test_stop_terminates_watcher_and_cleans_runtime_files \
-  test_reconcile_stale_marker_terminates_orphan_watcher \
-  test_reconcile_orphan_watcher_without_armed_marker \
-  test_concurrent_watcher_and_release_binding_is_idempotent; do
+  test_notify_missing_mic_action \
+  test_invalid_action_exits_64; do
   run_test "$test_name"
 done
 

@@ -170,11 +170,38 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+ensure_input_permissions() {
+  [[ "${BLIZL_HANDY_SKIP_INPUT_CHECK:-false}" == true ]] && return 0
+  local current_user="${USER:-$(id -un)}"
+  local in_input_group=false
+  if groups "$current_user" 2>/dev/null | grep -qw "input"; then
+    in_input_group=true
+  elif id -nG "$current_user" 2>/dev/null | grep -qw "input"; then
+    in_input_group=true
+  fi
+
+  if [[ "$in_input_group" != true ]]; then
+    say "Adding $current_user to the 'input' group for native push-to-talk key detection..."
+    if command -v sudo >/dev/null 2>&1; then
+      sudo usermod -aG input "$current_user" || true
+    fi
+  fi
+
+  if compgen -G "/dev/input/event*" >/dev/null 2>&1; then
+    if ! test -r /dev/input/event0 2>/dev/null; then
+      if command -v sudo >/dev/null 2>&1 && command -v setfacl >/dev/null 2>&1; then
+        sudo setfacl -m "u:${current_user}:r" /dev/input/event* 2>/dev/null || true
+      fi
+    fi
+  fi
+}
+
 preflight() {
   local command
   for command in jq flock perl awk mktemp; do
     command -v "$command" >/dev/null || fail "required command not found: $command"
   done
+  ensure_input_permissions
   [[ -f "$BINDINGS_FILE" ]] || fail "Hyprland bindings file not found: $BINDINGS_FILE"
   transaction_safe_target "$BINDINGS_FILE" || fail "bindings path resolves outside the supported user configuration roots"
   transaction_safe_target "$SETTINGS_FILE" || fail "Handy settings path resolves outside the supported user configuration roots"
@@ -339,8 +366,15 @@ configure_handy_binding() {
       sleep 0.1
     done
   fi
-  handy_settings_set_reserved "$SETTINGS_FILE"
-  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$HANDY_RESERVED_BINDING" ]] || fail "Handy did not retain the reserved shortcut"
+  handy_settings_set_shortcut "$SETTINGS_FILE" "$SELECTED_SHORTCUT"
+  local expected_binding
+  expected_binding="$(handy_shortcut_normalize "$SELECTED_SHORTCUT")"
+  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$expected_binding" ]] ||
+    fail "Handy did not retain the push-to-talk shortcut ($expected_binding)"
+  [[ "$(handy_settings_keyboard_implementation "$SETTINGS_FILE")" == "handy_keys" ]] ||
+    fail "Handy did not configure native handy_keys keyboard implementation"
+  [[ "$(handy_settings_push_to_talk "$SETTINGS_FILE")" == "true" ]] ||
+    fail "Handy did not enable push-to-talk mode"
 }
 
 configure_voxtype_hotkey() {
@@ -397,6 +431,9 @@ configure_shell_widget() {
 
 validate_reload() {
   [[ "${BLIZL_HANDY_SKIP_RELOAD:-false}" == true ]] && return 0
+  if command -v omarchy >/dev/null 2>&1; then
+    omarchy restart shell >/dev/null 2>&1 || true
+  fi
   if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null; then
     hyprctl reload >/dev/null
     local errors
@@ -604,18 +641,20 @@ main() {
   configure_shell_widget
   validate_reload
   start_handy_hidden
-  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$HANDY_RESERVED_BINDING" ]] || fail "Handy did not register the reserved shortcut"
+  local expected_binding
+  expected_binding="$(handy_shortcut_normalize "$SELECTED_SHORTCUT")"
+  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$expected_binding" ]] || fail "Handy did not register the push-to-talk shortcut"
   dictation_test
 
   jq -n \
     --arg version "2" \
     --arg transaction "$TRANSACTION_DIR" \
     --arg shortcut "$SELECTED_SHORTCUT" \
-    --arg reserved "$HANDY_RESERVED_BINDING" \
+    --arg handyBinding "$expected_binding" \
     --argjson handyInstalled "$HANDY_INSTALLED" \
     --argjson voxtypeHotkeyDisabled "$VOXTYPE_HOTKEY_DISABLED" \
     --arg installedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{version: ($version | tonumber), transaction: $transaction, shortcut: $shortcut, reservedBinding: $reserved, handyInstalled: $handyInstalled, voxtypeHotkeyDisabled: $voxtypeHotkeyDisabled, installedAt: $installedAt}' \
+    '{version: ($version | tonumber), transaction: $transaction, shortcut: $shortcut, handyBinding: $handyBinding, handyInstalled: $handyInstalled, voxtypeHotkeyDisabled: $voxtypeHotkeyDisabled, installedAt: $installedAt}' \
     >"$INSTALL_FILE"
   maybe_remove_voxtype
   COMMITTED=true

@@ -14,6 +14,8 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain [$2]";
 
 # shellcheck disable=SC1091
 source "$ROOT/lib/bindings.sh"
+# shellcheck disable=SC1091
+source "$ROOT/lib/handy-settings.sh"
 
 test_detects_push_to_talk_over_toggle_across_user_and_stock_files() {
   local user="$WORK/user.lua" stock="$WORK/stock.lua"
@@ -56,6 +58,7 @@ test_managed_block_unbinds_even_without_previous_action() {
   printf '%s\n' 'o.bind("F9", "Open terminal", "kitty")' >"$file"
   bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
   assert_contains "$file" 'hl.unbind("ALT + SPACE")'
+  assert_contains "$file" "Dictation push-to-talk is ALT + SPACE via Handy's native evdev hotkey (handy_keys)."
   assert_eq "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$file")" 1
   ! grep -Fq -- '-- Previous action:' "$file" || fail 'unexpected previous-action comment'
 }
@@ -73,7 +76,8 @@ test_previous_action_is_readable_and_write_is_idempotent() {
   bindings_write_managed "$file" F9 \
     'Start dictation (push-to-talk): voxtype record start' "$ROOT/bin/handy-trigger"
   assert_contains "$file" '-- Previous action: Start dictation (push-to-talk): voxtype record start'
-  assert_contains "$file" $'-- Previous action: Start dictation (push-to-talk): voxtype record start\nhl.unbind("F9")'
+  assert_contains "$file" "Dictation push-to-talk is F9 via Handy's native evdev hotkey (handy_keys)."
+  assert_contains "$file" 'hl.unbind("F9")'
   first="$(<"$file")"
   bindings_write_managed "$file" F9 \
     "$(bindings_action_for_key "$file" F9)" "$ROOT/bin/handy-trigger"
@@ -102,15 +106,14 @@ test_managed_block_rejects_malformed_detected_key() {
     fail 'malformed key changed the bindings file'
 }
 
-test_managed_block_emits_clean_bindings() {
+test_managed_block_emits_native_unbindings_and_comments() {
   local file="$WORK/clean-bindings.lua"
   printf '%s\n' 'o.bind("F9", "Open terminal", "kitty")' >"$file"
   bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
-  assert_contains "$file" 'o.bind('
-  assert_contains "$file" '"ALT + SPACE"'
-  assert_contains "$file" '{ release = true }'
-  assert_eq "$(grep -Fc -- '"ALT + SPACE"' "$file")" 3
-  assert_eq "$(grep -Fc -- 'release = true' "$file")" 1
+  assert_contains "$file" 'hl.unbind("ALT + SPACE")'
+  assert_contains "$file" "Handy's native evdev hotkey (handy_keys)"
+  ! grep -Fq -- 'o.bind(' <(grep -A 10 -- "$HANDY_BINDINGS_BEGIN" "$file") || fail 'unexpected o.bind in managed block'
+  ! grep -Fq -- 'release = true' "$file" || fail 'unexpected release = true binding in managed block'
   bindings_validate "$file" || fail 'bindings validation failed on generated file'
 }
 
@@ -119,34 +122,47 @@ test_managed_block_multi_modifier_and_clean_removal() {
   printf '%s\n' 'o.bind("SUPER + B", "Browser", "browser")' >"$file"
   original="$(<"$file")"
   bindings_write_managed "$file" 'SUPER + CTRL + X' '' "$ROOT/bin/handy-trigger"
-  assert_contains "$file" '"SUPER + CTRL + X"'
-  assert_eq "$(grep -Fc -- 'release = true' "$file")" 1
+  assert_contains "$file" 'hl.unbind("SUPER + CTRL + X")'
+  assert_contains "$file" "Handy's native evdev hotkey (handy_keys)"
   bindings_validate "$file" || fail 'bindings validation failed on multi-modifier file'
 
   bindings_remove_managed_block "$file" "$clean"
   assert_eq "$(<"$clean")" "$original"
-  ! grep -Fq -- 'handy-trigger' "$clean" || fail 'handy-trigger leaked outside managed block'
+  ! grep -Fq -- 'handy_keys' "$clean" || fail 'handy_keys comment leaked outside managed block'
+  ! grep -Fq -- 'SUPER + CTRL + X' "$clean" || fail 'managed binding leaked outside managed block'
   bindings_validate "$clean" || fail 'bindings validation failed on cleaned file'
 }
 
-test_chord_watcher_parses_any_modifier_and_key() {
-  python3 -c '
-from importlib.machinery import SourceFileLoader
-watcher = SourceFileLoader("watcher", "'"$ROOT"'/bin/handy-chord-watcher").load_module()
-parse_shortcut = watcher.parse_shortcut
+test_handy_shortcut_normalization_and_native_configuration() {
+  assert_eq "$(handy_shortcut_normalize "ALT + SPACE")" "alt+space"
+  assert_eq "$(handy_shortcut_normalize "SUPER + CTRL + X")" "super+ctrl+x"
+  assert_eq "$(handy_shortcut_normalize "ALT + ENTER")" "alt+enter"
+  assert_eq "$(handy_shortcut_normalize "  Ctrl + Shift + Space  ")" "ctrl+shift+space"
+  assert_eq "$(handy_shortcut_normalize "F9")" "f9"
 
-base, mods = parse_shortcut("ALT + SPACE")
-assert len(base) == 1 and len(mods) == 1
+  local settings="$WORK/settings.json"
+  cat >"$settings" <<'JSON'
+{
+  "settings": {
+    "push_to_talk": false,
+    "keyboard_implementation": "tauri",
+    "bindings": {
+      "transcribe": {
+        "current_binding": "ctrl+space"
+      }
+    },
+    "other": "value"
+  },
+  "root_field": 123
+}
+JSON
 
-base, mods = parse_shortcut("SUPER + CTRL + SHIFT + ALT + SPACE")
-assert len(base) == 1 and len(mods) == 4
-
-base, mods = parse_shortcut("F9")
-assert len(base) == 1 and len(mods) == 0
-
-base, mods = parse_shortcut("CTRL + RETURN")
-assert len(base) >= 1 and len(mods) == 1
-' || fail 'chord watcher parser failed'
+  handy_settings_configure_native "$settings" "ALT + SPACE"
+  assert_eq "$(handy_settings_binding "$settings")" "alt+space"
+  assert_eq "$(handy_settings_keyboard_implementation "$settings")" "handy_keys"
+  assert_eq "$(handy_settings_push_to_talk "$settings")" "true"
+  assert_eq "$(jq -r '.settings.other' "$settings")" "value"
+  assert_eq "$(jq -r '.root_field' "$settings")" "123"
 }
 
 test_detects_push_to_talk_over_toggle_across_user_and_stock_files
@@ -158,7 +174,7 @@ test_detects_non_string_action_conflicts
 test_previous_action_is_readable_and_write_is_idempotent
 test_managed_block_unbinds_all_voxtype_keys
 test_managed_block_rejects_malformed_detected_key
-test_managed_block_emits_clean_bindings
+test_managed_block_emits_native_unbindings_and_comments
 test_managed_block_multi_modifier_and_clean_removal
-test_chord_watcher_parses_any_modifier_and_key
+test_handy_shortcut_normalization_and_native_configuration
 printf 'binding conflict tests: ok\n'

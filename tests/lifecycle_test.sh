@@ -32,8 +32,8 @@ LUA
   bindings_write_managed "$file" "ALT + SPACE" "" "$ROOT/bin/handy-trigger"
   bindings_write_managed "$file" "ALT + SPACE" "" "$ROOT/bin/handy-trigger"
   assert_eq "$(grep -F --count -- "$HANDY_BINDINGS_BEGIN" "$file")" 1
-  assert_eq "$(grep -Fc 'Start Handy dictation' "$file")" 1
-  assert_eq "$(grep -Fc 'Stop Handy dictation' "$file")" 1
+  assert_eq "$(grep -Fc 'hl.unbind("ALT + SPACE")' "$file")" 1
+  assert_eq "$(grep -Fc 'native evdev hotkey (handy_keys)' "$file")" 1
   bindings_validate "$file" || fail "bindings syntax validation failed"
 }
 
@@ -46,12 +46,14 @@ JSON
   # Test paths are resolved at runtime.
   # shellcheck disable=SC1091
   source "$ROOT/lib/handy-settings.sh"
-  HANDY_RESERVED_BINDING='ctrl+alt+shift+super+f24' handy_settings_set_reserved "$file"
-  assert_eq "$(jq -r '.settings.bindings.transcribe.current_binding' "$file")" 'ctrl+alt+shift+super+f24'
+  handy_settings_set_shortcut "$file" "ALT + SPACE"
+  assert_eq "$(jq -r '.settings.bindings.transcribe.current_binding' "$file")" 'alt+space'
+  assert_eq "$(jq -r '.settings.keyboard_implementation' "$file")" 'handy_keys'
+  assert_eq "$(jq -r '.settings.push_to_talk' "$file")" true
   assert_eq "$(jq -r '.settings.unrelated.keep' "$file")" me
   assert_eq "$(jq -r '.top' "$file")" 42
   printf '{broken\n' >"$file"
-  if handy_settings_set_reserved "$file" 2>/dev/null; then
+  if handy_settings_set_shortcut "$file" "ALT + SPACE" 2>/dev/null; then
     fail 'malformed Handy settings were accepted'
   fi
 }

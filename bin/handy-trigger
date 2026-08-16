@@ -2,59 +2,14 @@
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-# Resolved from the installed plugin directory.
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/microphone.sh"
 
-runtime_root="${BLIZL_HANDY_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/blizl-handy}"
-armed_file="$runtime_root/recording-armed"
-lock_file="$runtime_root/trigger.lock"
 handy_bin="${HANDY_BIN:-handy}"
 pgrep_bin="${PGREP_BIN:-pgrep}"
 
-mkdir -p -- "$runtime_root"
-chmod 700 -- "$runtime_root"
-
 handy_is_running() {
   "$pgrep_bin" -x handy >/dev/null 2>&1
-}
-
-watcher_pid_file="$runtime_root/watcher.pid"
-
-stop_chord_watcher() {
-  if [[ -f "$watcher_pid_file" ]]; then
-    local wpid
-    wpid="$(<"$watcher_pid_file")"
-    if [[ "$wpid" =~ ^[0-9]+$ && "$wpid" != "$$" ]]; then
-      kill "$wpid" >/dev/null 2>&1 || true
-    fi
-    rm -f -- "$watcher_pid_file"
-  fi
-}
-
-start_chord_watcher() {
-  stop_chord_watcher
-  local watcher_bin="${HANDY_CHORD_WATCHER_BIN:-$PLUGIN_ROOT/bin/handy-chord-watcher}"
-  [[ -x "$watcher_bin" ]] || return 0
-  local shortcut
-  shortcut="${BLIZL_HANDY_SHORTCUT:-}"
-  if [[ -z "$shortcut" && -f "$HOME/.local/state/blizl.handy/install.json" ]]; then
-    shortcut="$(jq -r '.shortcut // empty' "$HOME/.local/state/blizl.handy/install.json" 2>/dev/null || true)"
-  fi
-  shortcut="${shortcut:-ALT + SPACE}"
-
-  "$watcher_bin" "$shortcut" "$0" 9>&- >/dev/null 2>&1 &
-  local wpid=$!
-  printf '%s\n' "$wpid" >"$watcher_pid_file"
-}
-
-reconcile_stale_marker() {
-  if ! handy_is_running; then
-    rm -f -- "$armed_file"
-    stop_chord_watcher
-  elif [[ ! -f "$armed_file" && -f "$watcher_pid_file" ]]; then
-    stop_chord_watcher
-  fi
 }
 
 ensure_handy_is_running() {
@@ -67,11 +22,7 @@ ensure_handy_is_running() {
   return 1
 }
 
-press() {
-  reconcile_stale_marker
-  # A repeated key press is already satisfied. Do not toggle Handy twice.
-  [[ -f "$armed_file" ]] && return 0
-
+toggle() {
   if ! microphone_is_available; then
     notify_missing_microphone
     return 2
@@ -81,26 +32,12 @@ press() {
     notify_handy_failure
     return 1
   fi
-
-  : >"$armed_file"
-  start_chord_watcher
-}
-
-release() {
-  stop_chord_watcher
-  [[ -f "$armed_file" ]] || return 0
-  rm -f -- "$armed_file"
-
-  if ! "$handy_bin" --toggle-transcription; then
-    "$handy_bin" --cancel >/dev/null 2>&1 || true
-    notify_stop_failure
-    return 1
-  fi
 }
 
 stop() {
-  stop_chord_watcher
-  rm -f -- "$armed_file"
+  if ! handy_is_running; then
+    return 0
+  fi
 
   if ! "$handy_bin" --toggle-transcription; then
     "$handy_bin" --cancel >/dev/null 2>&1 || true
@@ -109,18 +46,14 @@ stop() {
   fi
 }
 
-flock_bin="${FLOCK_BIN:-flock}"
-
-exec 9>"$lock_file"
-"$flock_bin" -x 9
-
 case "${1:-}" in
-  press) press ;;
-  release) release ;;
   stop) stop ;;
+  toggle) toggle ;;
+  press) toggle ;;
+  release) stop ;;
   notify-missing-mic) notify_missing_microphone ;;
   *)
-    echo "Usage: handy-trigger {press|release|stop|notify-missing-mic}" >&2
+    echo "Usage: handy-trigger {stop|toggle|notify-missing-mic}" >&2
     exit 64
     ;;
 esac

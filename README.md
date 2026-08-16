@@ -107,33 +107,20 @@ Handy cannot finish it, the trigger cancels the recording and sends a failure
 notification. Middle-click opens Omarchy's audio panel. Clicking while no
 default microphone exists sends a notification instead.
 
-### Push-to-talk and ephemeral kernel chord watcher
+### Native evdev push-to-talk (`handy_keys`)
 
-Push-to-talk shortcuts (such as `ALT + SPACE`, `SUPER + SPACE`, or custom chords)
-include kernel-level modifier release safety matching native push-to-talk parity:
+Push-to-talk shortcuts (such as `ALT + SPACE`, `ALT + ENTER`, `SUPER + SPACE`, or custom chords)
+leverage Handy's native kernel-level evdev engine (`handy_keys`):
 
-- **The Compositor Release Challenge**: In Wayland compositors (such as Hyprland),
-  key-release bindings for multi-key shortcuts can be missed or dropped if the
-  user releases the modifier key (`Alt`, `Super`, etc.) before the base key
-  (`Space`). Standard compositor-level bindings alone cannot guarantee release
-  detection across all natural typing habits.
-- **Ephemeral Kernel Chord Watcher (`bin/handy-chord-watcher`)**: When dictation
-  is triggered on key-press, `handy-trigger` spawns a lightweight, ephemeral
-  `evdev` watcher in the background. It monitors keyboard input events directly
-  from the Linux kernel (`/dev/input/event*`) specifically for the keys and
-  modifiers in the configured chord.
-- **Instant Chord Disarm**: The moment *any* key or modifier in the chord is
-  released (whether the user lets go of `Space` first or `Alt` first), the watcher
-  transparently invokes `handy-trigger release` and terminates immediately.
-- **Zero Idle Overhead & Clean Bindings**: The watcher is strictly ephemeral—it
-  runs only while dictation is actively recording and exits immediately when the
-  chord is released. Because chord release is watched transparently at the kernel
-  level, `lib/bindings.sh` generates clean, minimal `o.bind` entries without
-  polluting Hyprland config with raw modifier bindings or requiring persistent
-  background daemons.
-- **Idempotent State Machine**: Releasing any remaining keys afterward is safely
-  ignored by `handy-trigger`'s file-locked state machine, preventing Handy from
-  getting stuck in recording mode or triggering a duplicate toggle.
+- **Direct Kernel-Level Hotkeys**: Handy connects directly to Linux input devices (`/dev/input/event*`)
+  via its native Rust `handy_keys` engine, matching Omarchy's native VoxType architecture.
+- **Modifier Release Parity**: Key release is captured directly from the kernel regardless of key
+  release order (e.g. releasing `Alt` before `Space` or `Enter`), ensuring dictation stops and transcribes
+  immediately every time.
+- **Zero Compositor Interference**: Hyprland unbinds conflicting shortcuts (`hl.unbind(...)`) so
+  compositor grabs do not intercept or drop modifier release events.
+- **Zero Idle Wrapper Overhead**: Eliminates external wrapper layers, timeouts, and daemons for instant,
+  100% reliable voice typing.
 
 ## Remove the integration
 
@@ -244,9 +231,9 @@ ship the Omarchy shell.
 The implementation deliberately separates core responsibilities:
 
 - `HandyWidget.qml`: PipeWire state and bar interaction
-- `bin/handy-trigger`: runtime press/release state machine and process orchestration
-- `bin/handy-chord-watcher`: ephemeral evdev kernel chord watcher for modifier release safety
-- `bin/setup` and `bin/uninstall`: reversible integration ownership
+- `bin/handy-trigger`: runtime emergency stop, manual toggle, and notifications
+- `bin/setup` and `bin/uninstall`: reversible integration ownership and native `handy_keys` configuration
+- `bin/restore-voxtype`: clean rollback and recovery to stock or previous VoxType setup
 - `bin/e2e-checkpoint`: machine-level E2E recovery
 
 Shell helpers in `lib/` contain pure detection and file-transformation logic so

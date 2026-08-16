@@ -35,8 +35,9 @@ o.bind("SUPER + B", "Browser", "browser")
 hl.unbind("F9")
 
 -- BEGIN blizl.handy managed bindings
-o.bind("ALT + SPACE", "Start Handy dictation", "/plugin/bin/handy-trigger press")
-o.bind("ALT + SPACE", "Stop Handy dictation", "/plugin/bin/handy-trigger release", { release = true })
+-- Dictation push-to-talk is ALT + SPACE via Handy's native evdev hotkey (handy_keys).
+hl.unbind("F9")
+hl.unbind("ALT + SPACE")
 -- END blizl.handy managed bindings
 LUA
 
@@ -188,8 +189,9 @@ cat >"$previous_home/.config/hypr/bindings.lua" <<'LUA'
 hl.unbind("F9")
 
 -- BEGIN blizl.handy managed bindings
-o.bind("ALT + SPACE", "Start Handy dictation", "/plugin/bin/handy-trigger press")
-o.bind("ALT + SPACE", "Stop Handy dictation", "/plugin/bin/handy-trigger release", { release = true })
+-- Dictation push-to-talk is ALT + SPACE via Handy's native evdev hotkey (handy_keys).
+hl.unbind("F9")
+hl.unbind("ALT + SPACE")
 -- END blizl.handy managed bindings
 LUA
 

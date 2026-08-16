@@ -235,7 +235,7 @@ restore_stock_voxtype_bindings() {
   local temporary
   temporary="$(mktemp "${BINDINGS_FILE}.tmp.XXXXXX")"
   awk '
-    /^-- Dictation push-to-talk is ALT\+SPACE via (Handy|voxtype)/ {
+    /^-- Dictation push-to-talk is/ {
       old_dictation_comment = 1
       next
     }
@@ -250,7 +250,7 @@ restore_stock_voxtype_bindings() {
     $0 == "hl.unbind(\"F9\")" { next }
     { print }
   ' "$BINDINGS_FILE" >"$temporary"
-  chmod --reference="$BINDINGS_FILE" "$temporary"
+  chmod --reference="$BINDINGS_FILE" "$temporary" 2>/dev/null || chmod 644 "$temporary"
   mv -- "$temporary" "$BINDINGS_FILE"
 }
 
