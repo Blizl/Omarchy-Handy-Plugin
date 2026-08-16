@@ -1,10 +1,10 @@
 # Handy Dictation for Omarchy Quattro
 
 `blizl.handy` is a Quattro-native bar widget and push-to-talk integration for
-[Handy](https://github.com/cjpais/Handy). It keeps a microphone glyph visible,
-shows capture state directly from PipeWire, provides modifier release safety for
-multi-key shortcuts, and prevents a key release from starting Handy when its
-matching key press was rejected.
+[Handy](https://github.com/cjpais/Handy). It keeps a dynamic microphone glyph visible,
+shows capture state directly from PipeWire, provides 100% reliable kernel-level evdev
+push-to-talk (`handy_keys`), and ensures clean modifier-release parity regardless of which
+key in the shortcut chord is released first.
 
 ![Handy Settings Preview](assets/handy-settings.png)
 
@@ -71,12 +71,13 @@ previous integration, then reapplies the latest conflict-safe setup so
 uninstall still returns the machine to its original state.
 
 Setup opens Handy's official onboarding for model selection. It then asks which
-push-to-talk shortcut to own, moves Handy's internal shortcut to a reserved
-chord, disables VoxType's native hotkey, and unbinds all detected user and stock
-VoxType shortcuts. If the selected Handy shortcut overlaps a VoxType shortcut,
-setup warns before changing anything and requires explicit confirmation.
-VoxType may remain installed, but Handy becomes Omarchy's only active dictation
-integration until uninstall restores the previous controls.
+push-to-talk shortcut to own, configures Handy's native `handy_keys` engine with
+that shortcut in push-to-talk mode, ensures kernel input device permissions, disables
+VoxType's native hotkey, and unbinds all detected user and stock VoxType shortcuts in
+Hyprland. If the selected Handy shortcut overlaps a VoxType shortcut, setup warns
+before changing anything and requires explicit confirmation. VoxType may remain
+installed, but Handy becomes Omarchy's only active dictation integration until
+uninstall restores the previous controls.
 
 Setup also replaces the built-in center Dictation indicator with Handy, then
 runs an inline acceptance test directly in the active terminal that clearly
