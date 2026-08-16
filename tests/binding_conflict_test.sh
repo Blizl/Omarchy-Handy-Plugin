@@ -179,6 +179,27 @@ test_managed_block_modifier_release_idempotency() {
   bindings_validate "$file" || fail 'bindings validation failed after idempotent write'
 }
 
+test_normalize_shortcut() {
+  assert_eq "$(bindings_normalize_shortcut 'ALT + ENTER')" 'ALT + RETURN'
+  assert_eq "$(bindings_normalize_shortcut 'alt + enter')" 'ALT + RETURN'
+  assert_eq "$(bindings_normalize_shortcut 'ctrl + esc')" 'CTRL + ESCAPE'
+  assert_eq "$(bindings_normalize_shortcut 'SUPER + SPACE')" 'SUPER + SPACE'
+  assert_eq "$(bindings_normalize_shortcut 'F9')" 'F9'
+}
+
+test_managed_block_normalizes_enter_to_return() {
+  local file="$WORK/enter-to-return.lua"
+  printf '%s\n' 'o.bind("SUPER + B", "Browser", "browser")' >"$file"
+  bindings_write_managed "$file" 'ALT + ENTER' '' "$ROOT/bin/handy-trigger"
+  assert_contains "$file" 'hl.unbind("ALT + ENTER")'
+  assert_contains "$file" 'hl.unbind("ALT + RETURN")'
+  assert_contains "$file" '"ALT + RETURN"'
+  assert_contains "$file" '"Alt_L"'
+  assert_contains "$file" '"Alt_R"'
+  ! grep -Eq 'o\.bind\(\s*"ALT \+ ENTER"' "$file" || fail 'unnormalized ALT + ENTER was bound'
+  bindings_validate "$file" || fail 'bindings validation failed on normalized enter file'
+}
+
 test_detects_push_to_talk_over_toggle_across_user_and_stock_files
 test_user_push_to_talk_wins_when_both_sources_have_one
 test_detects_all_voxtype_entry_points
@@ -193,4 +214,6 @@ test_managed_block_emits_modifier_release_bindings
 test_managed_block_single_key_has_no_modifier_releases
 test_managed_block_multi_modifier_and_clean_removal
 test_managed_block_modifier_release_idempotency
+test_normalize_shortcut
+test_managed_block_normalizes_enter_to_return
 printf 'binding conflict tests: ok\n'
