@@ -5,6 +5,21 @@
 shows capture state directly from PipeWire, and prevents a key release from
 starting Handy when its matching key press was rejected.
 
+## About Handy
+
+[Handy](https://github.com/cjpais/Handy) is a free and open-source desktop
+speech-to-text application. It records speech when you press or hold a
+configured shortcut, transcribes it locally with a downloaded model, and
+inserts the resulting text into the application you are using. Handy works
+offline, so transcription does not require sending your voice to a cloud
+service.
+
+Handy is released under the MIT License and supports Whisper and Parakeet
+speech-recognition models. Handy's own interface handles model downloads,
+language and transcription settings, and transcript history. This plugin adds
+the Omarchy-specific Quickshell microphone indicator, push-to-talk bindings,
+missing-microphone handling, and reversible setup around that upstream app.
+
 ## Install
 
 ```bash
@@ -92,8 +107,8 @@ developer's live Omarchy configuration.
 
 ```bash
 tests/run
-shellcheck bin/* lib/*.sh tests/*.sh tests/run tests-e2e/*
-shfmt -d -i 2 -ci bin/* lib/*.sh tests/*.sh tests/run tests-e2e/*
+shellcheck bin/* lib/*.sh tests/*.sh tests-e2e/run tests-e2e/verify-baseline tests-e2e/scenarios/*
+shfmt -d -i 2 -ci bin/* lib/*.sh tests/*.sh tests-e2e/run tests-e2e/verify-baseline tests-e2e/scenarios/*
 jq --exit-status . manifest.json
 omarchy plugin validate .
 git diff --check

@@ -3,7 +3,7 @@
   "id": "blizl.handy",
   "name": "Handy Dictation",
   "version": "1.0.0",
-  "author": "Blizl",
+  "author": "Blizl Labs LLC",
   "license": "MIT",
   "description": "Handy voice dictation and microphone status for Omarchy Quattro",
   "kinds": ["bar-widget"],
