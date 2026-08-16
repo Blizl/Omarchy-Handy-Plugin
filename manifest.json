@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "blizl.handy",
+  "name": "Handy Dictation",
+  "version": "1.0.0",
+  "author": "Blizl",
+  "license": "MIT",
+  "description": "Handy voice dictation and microphone status for Omarchy Quattro",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "HandyWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Handy Dictation",
+    "description": "Microphone availability and live capture status with one-click access to Handy.",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

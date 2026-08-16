@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOME_ROOT="${HOME:?HOME must be set}"
+fail() {
+  printf 'baseline: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ "${BLIZL_HANDY_BASELINE_TEST:-}" == passed ]] || fail "prove the existing Alt+Space dictation test first (set BLIZL_HANDY_BASELINE_TEST=passed)"
+[[ "${BLIZL_HANDY_BASELINE_INDICATOR:-}" == passed ]] || fail "prove the existing microphone indicator behavior first (set BLIZL_HANDY_BASELINE_INDICATOR=passed)"
+[[ -f "$HOME_ROOT/.config/hypr/bindings.lua" ]] || fail "Hyprland bindings file is missing"
+command -v handy >/dev/null || fail "Handy is not installed"
+command -v wpctl >/dev/null || fail "wpctl is not installed"
+if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null; then
+  errors_file="${BLIZL_HANDY_BASELINE_ERRORS_FILE:-$HOME_ROOT/.local/state/blizl.handy/baseline-hypr-errors.txt}"
+  mkdir -p "$(dirname -- "$errors_file")"
+  current_errors="$(hyprctl configerrors 2>/dev/null)"
+  if [[ -f "$errors_file" ]]; then
+    cmp -s <(printf '%s\n' "$current_errors") "$errors_file" || fail "Hyprland has new configuration errors"
+  else
+    printf '%s\n' "$current_errors" >"$errors_file"
+  fi
+fi
+printf 'Baseline accepted: existing Handy dictation and microphone setup are user-confirmed.\n'

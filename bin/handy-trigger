@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/microphone.sh"
+
+runtime_root="${BLIZL_HANDY_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/blizl-handy}"
+armed_file="$runtime_root/recording-armed"
+lock_file="$runtime_root/trigger.lock"
+handy_bin="${HANDY_BIN:-handy}"
+pgrep_bin="${PGREP_BIN:-pgrep}"
+
+mkdir -p -- "$runtime_root"
+chmod 700 -- "$runtime_root"
+
+handy_is_running() {
+  "$pgrep_bin" -x handy >/dev/null 2>&1
+}
+
+reconcile_stale_marker() {
+  [[ -f "$armed_file" ]] || return 0
+  handy_is_running || rm -f -- "$armed_file"
+}
+
+ensure_handy_is_running() {
+  handy_is_running && return 0
+  "$handy_bin" --start-hidden >/dev/null 2>&1 &
+  for _ in {1..30}; do
+    handy_is_running && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+press() {
+  reconcile_stale_marker
+  # A repeated key press is already satisfied. Do not toggle Handy twice.
+  [[ -f "$armed_file" ]] && return 0
+
+  if ! microphone_is_available; then
+    notify_missing_microphone
+    return 2
+  fi
+
+  if ! ensure_handy_is_running || ! "$handy_bin" --toggle-transcription; then
+    notify_handy_failure
+    return 1
+  fi
+
+  : >"$armed_file"
+}
+
+release() {
+  [[ -f "$armed_file" ]] || return 0
+  rm -f -- "$armed_file"
+
+  if ! "$handy_bin" --toggle-transcription; then
+    "$handy_bin" --cancel >/dev/null 2>&1 || true
+    notify_stop_failure
+    return 1
+  fi
+}
+
+exec 9>"$lock_file"
+flock -x 9
+
+case "${1:-}" in
+  press) press ;;
+  release) release ;;
+  notify-missing-mic) notify_missing_microphone ;;
+  *)
+    echo "Usage: handy-trigger {press|release|notify-missing-mic}" >&2
+    exit 64
+    ;;
+esac

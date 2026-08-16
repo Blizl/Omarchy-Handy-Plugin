@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+CHECKPOINT_TOOL="$ROOT/bin/e2e-checkpoint"
+BASELINE_TOOL="$ROOT/tests-e2e/verify-baseline"
+checkpoint_id=''
+committed=false
+
+cleanup() {
+  local status=$?
+  if [[ "$committed" != true && -n "$checkpoint_id" ]]; then
+    printf 'E2E did not commit; restoring checkpoint %s.\n' "$checkpoint_id" >&2
+    "$CHECKPOINT_TOOL" restore "$checkpoint_id" || printf 'Recovery failed; run the printed restore command.\n' >&2
+  fi
+  return "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+"$BASELINE_TOOL"
+[[ "${BLIZL_HANDY_E2E_LIVE:-}" == yes ]] || {
+  printf 'Baseline is valid. Set BLIZL_HANDY_E2E_LIVE=yes to enable live scenarios.\n'
+  exit 0
+}
+
+export BLIZL_HANDY_REQUIRE_PACKAGE_RECOVERY=true
+checkpoint_id="$($CHECKPOINT_TOOL create)"
+printf '\nRecovery checkpoint created: %s\n' "$checkpoint_id"
+printf 'To restore manually:\n%s restore %s\n\n' "$CHECKPOINT_TOOL" "$checkpoint_id"
+"$CHECKPOINT_TOOL" verify "$checkpoint_id"
+
+if [[ -d "$ROOT/tests-e2e/scenarios" ]]; then
+  while IFS= read -r scenario; do
+    [[ -x "$scenario" ]] || continue
+    "$scenario"
+  done < <(find "$ROOT/tests-e2e/scenarios" -maxdepth 1 -type f -print | sort)
+fi
+
+[[ "${BLIZL_HANDY_E2E_EXPECTED_STATE:-}" == passed ]] || {
+  printf 'Live scenarios completed; checkpoint retained and rollback will run.\n'
+  exit 1
+}
+"$CHECKPOINT_TOOL" verify-current "$checkpoint_id" plugin
+committed=true
+printf 'E2E state accepted; retain checkpoint %s until shell and login verification complete.\n' "$checkpoint_id"

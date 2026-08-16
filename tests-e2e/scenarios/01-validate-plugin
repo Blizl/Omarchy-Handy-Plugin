@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+
+omarchy plugin validate "$ROOT"
+jq --exit-status '.id == "blizl.handy" and (.kinds | index("bar-widget") != null)' \
+  "$ROOT/manifest.json" >/dev/null

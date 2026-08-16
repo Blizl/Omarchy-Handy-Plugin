@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$ROOT/lib/checkpoint.sh"
+
+usage() {
+  echo "usage: $0 {create|verify|restore|discard|verify-current} [checkpoint-id]" >&2
+  exit 2
+}
+command="${1:-}"
+case "$command" in
+  create)
+    shift
+    (($# == 0)) || usage
+    checkpoint_create
+    ;;
+  verify | restore | discard | verify-current)
+    id="${2:-}"
+    [[ -n "$id" ]] || usage
+    case "$command" in
+      verify) checkpoint_verify "$id" ;;
+      restore) checkpoint_restore "$id" ;;
+      discard) checkpoint_discard "$id" ;;
+      verify-current) checkpoint_verify_current "$id" "${3:-}" ;;
+    esac
+    ;;
+  *) usage ;;
+esac

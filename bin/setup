@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/bindings.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/handy-settings.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/transaction.sh"
+
+STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
+BINDINGS_FILE="${HYPR_BINDINGS_FILE:-$HOME/.config/hypr/bindings.lua}"
+AUTOSTART_FILE="${HANDY_AUTOSTART_FILE:-$HOME/.config/autostart/Handy.desktop}"
+SETTINGS_FILE="$(handy_settings_file)"
+INSTALL_FILE="$STATE_ROOT/install.json"
+HANDY_WAS_RUNNING=false
+HANDY_STARTED_BY_SETUP=false
+HANDY_INSTALLED=false
+VOXTYPE_REMOVED=false
+VOXTYPE_RECOVERY_ACTIVE=false
+VOXTYPE_RECOVERY=''
+CREATED_TRANSACTION=false
+COMMITTED=false
+
+say() { printf '%s\n' "$*"; }
+fail() {
+  printf 'setup: %s\n' "$*" >&2
+  exit 1
+}
+
+confirm() {
+  local prompt="$1"
+  local default="${2:-no}"
+  local answer suffix
+
+  if [[ -n "${BLIZL_HANDY_CONFIRM:-}" ]]; then
+    [[ "$BLIZL_HANDY_CONFIRM" == yes ]]
+    return
+  fi
+  [[ -t 0 ]] || return 1
+  [[ "$default" == yes ]] && suffix='[Y/n]' || suffix='[y/N]'
+  read -r -p "$prompt $suffix " answer
+  answer="${answer:-$default}"
+  [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+cleanup() {
+  local status=$?
+  if ((status != 0)) && [[ "$CREATED_TRANSACTION" == true && "$COMMITTED" != true ]]; then
+    say "Setup failed; restoring plugin-managed files."
+    transaction_restore "$TRANSACTION_DIR" || {
+      printf 'Setup rollback failed.\n' >&2
+      status=1
+    }
+    if [[ "$HANDY_STARTED_BY_SETUP" == true ]]; then
+      if [[ "$HANDY_WAS_RUNNING" == true ]]; then
+        handy --start-hidden >/dev/null 2>&1 &
+      else
+        pkill -x handy >/dev/null 2>&1 || status=1
+      fi
+    fi
+    if [[ "$HANDY_INSTALLED" == true ]]; then
+      sudo pacman -R --noconfirm handy-bin >/dev/null 2>&1 || status=1
+    fi
+    if [[ "$VOXTYPE_RECOVERY_ACTIVE" == true || "$VOXTYPE_REMOVED" == true ]]; then
+      voxtype_restore || status=1
+    fi
+  fi
+  return "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+preflight() {
+  local command
+  for command in jq flock perl awk mktemp; do
+    command -v "$command" >/dev/null || fail "required command not found: $command"
+  done
+  [[ -f "$BINDINGS_FILE" ]] || fail "Hyprland bindings file not found: $BINDINGS_FILE"
+  transaction_safe_target "$BINDINGS_FILE" || fail "bindings path resolves outside the supported user configuration roots"
+  transaction_safe_target "$SETTINGS_FILE" || fail "Handy settings path resolves outside the supported user configuration roots"
+  transaction_safe_target "$AUTOSTART_FILE" || fail "autostart path resolves outside the supported user configuration roots"
+  transaction_safe_target "$INSTALL_FILE" || fail "state path resolves outside the supported user configuration roots"
+  if [[ "${BLIZL_HANDY_FORCE_INSTALL:-false}" == true ]] || ! command -v handy >/dev/null; then
+    command -v "${BLIZL_HANDY_INSTALL_BIN:-yay}" >/dev/null || fail "Handy is absent and no AUR installer was found (install yay)"
+  fi
+  bindings_validate "$BINDINGS_FILE" || fail "Hyprland bindings file has an incomplete Handy managed block"
+  omarchy plugin validate "$PLUGIN_ROOT"
+}
+
+install_handy() {
+  if [[ "${BLIZL_HANDY_FORCE_INSTALL:-false}" != true ]] && command -v handy >/dev/null; then
+    return 0
+  fi
+  say "Installing handy-bin from the AUR…"
+  if [[ -n "${BLIZL_HANDY_INSTALL_BIN:-}" ]]; then
+    "$BLIZL_HANDY_INSTALL_BIN" -S --needed --noconfirm handy-bin
+  else
+    yay -S --needed --noconfirm handy-bin
+  fi
+  HANDY_INSTALLED=true
+}
+
+launch_onboarding() {
+  [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true ]] && return 0
+  say "Opening Handy. Complete its official model onboarding, then return here."
+  if command -v uwsm-app >/dev/null; then
+    uwsm-app -- handy >/dev/null 2>&1 &
+  else
+    handy >/dev/null 2>&1 &
+  fi
+  read -r -p "Press Enter when Handy has a model ready… "
+}
+
+select_shortcut() {
+  local voxtype_key choice custom
+  voxtype_key="$(bindings_detect_voxtype_key "$BINDINGS_FILE")"
+
+  if [[ -n "${BLIZL_HANDY_SHORTCUT:-}" ]]; then
+    SELECTED_SHORTCUT="$BLIZL_HANDY_SHORTCUT"
+    return
+  fi
+  [[ -t 0 ]] || fail "set BLIZL_HANDY_SHORTCUT for non-interactive setup"
+
+  say "Choose the push-to-talk shortcut:"
+  if [[ -n "$voxtype_key" ]]; then
+    say "  1. Reuse detected VoxType shortcut ($voxtype_key)"
+  else
+    say "  1. Reuse detected VoxType shortcut (none detected)"
+  fi
+  say "  2. Use ALT + SPACE"
+  say "  3. Enter a custom shortcut"
+  read -r -p "Selection [2]: " choice
+  case "${choice:-2}" in
+    1)
+      [[ -n "$voxtype_key" ]] || fail "no active VoxType shortcut was detected"
+      SELECTED_SHORTCUT="$voxtype_key"
+      ;;
+    2) SELECTED_SHORTCUT="ALT + SPACE" ;;
+    3)
+      read -r -p "Custom shortcut (Omarchy syntax): " custom
+      SELECTED_SHORTCUT="$custom"
+      ;;
+    *) fail "invalid shortcut selection" ;;
+  esac
+}
+
+configure_binding() {
+  local existing trigger_path
+  existing="$(bindings_action_for_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT")"
+  if [[ -n "$existing" && "$existing" != *[Vv]ox[Tt]ype* ]]; then
+    say "$SELECTED_SHORTCUT is currently bound to: $existing"
+    confirm "Replace that action?" no || fail "shortcut replacement declined"
+  fi
+  trigger_path="$PLUGIN_ROOT/bin/handy-trigger"
+  bindings_write_managed "$BINDINGS_FILE" "$SELECTED_SHORTCUT" "$existing" "$trigger_path"
+}
+
+configure_handy_binding() {
+  if pgrep -x handy >/dev/null 2>&1; then
+    HANDY_WAS_RUNNING=true
+    pkill -x handy || true
+    for _ in {1..30}; do
+      pgrep -x handy >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+  fi
+  handy_settings_set_reserved "$SETTINGS_FILE"
+  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$HANDY_RESERVED_BINDING" ]] || fail "Handy did not retain the reserved shortcut"
+}
+
+configure_autostart() {
+  local temporary
+  mkdir -p -- "$(dirname -- "$AUTOSTART_FILE")"
+  if [[ -f "$AUTOSTART_FILE" ]]; then
+    temporary="$(mktemp "${AUTOSTART_FILE}.tmp.XXXXXX")"
+    awk '
+      /^Exec=/ { if (!found) print "Exec=handy --start-hidden"; found = 1; next }
+      { print }
+      END { if (!found) print "Exec=handy --start-hidden" }
+    ' "$AUTOSTART_FILE" >"$temporary"
+    chmod --reference="$AUTOSTART_FILE" "$temporary"
+    mv -- "$temporary" "$AUTOSTART_FILE"
+  else
+    cat >"$AUTOSTART_FILE" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Handy
+Comment=Start Handy hidden for push-to-talk dictation
+Exec=handy --start-hidden
+StartupNotify=false
+Terminal=false
+DESKTOP
+  fi
+}
+
+validate_reload() {
+  [[ "${BLIZL_HANDY_SKIP_RELOAD:-false}" == true ]] && return 0
+  if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null; then
+    hyprctl reload >/dev/null
+    local errors
+    errors="$(hyprctl configerrors)"
+    [[ -z "$errors" ]] || fail "Hyprland configuration errors: $errors"
+  fi
+}
+
+start_handy_hidden() {
+  handy --start-hidden >/dev/null 2>&1 &
+  HANDY_STARTED_BY_SETUP=true
+  for _ in {1..30}; do
+    pgrep -x handy >/dev/null 2>&1 && return 0
+    sleep 0.1
+  done
+  fail "Handy did not start"
+}
+
+dictation_test() {
+  [[ "${BLIZL_HANDY_DICTATION_TEST:-}" == passed ]] && return 0
+  [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true ]] && fail "set BLIZL_HANDY_DICTATION_TEST=passed only after a real dictation test"
+  say "Real dictation test: focus a text field, hold $SELECTED_SHORTCUT, speak, then release it."
+  confirm "Did the dictated text appear?" no || fail "dictation test did not pass"
+}
+
+maybe_remove_voxtype() {
+  local version artifact recovery path relative enabled active
+  pacman -Q voxtype-bin >/dev/null 2>&1 || return 0
+  confirm "Handy passed. Remove VoxType?" no || return 0
+
+  version="$(pacman -Q voxtype-bin | awk '{print $2}')"
+  artifact="$(find "${BLIZL_HANDY_PACKAGE_CACHE_DIR:-/var/cache/pacman/pkg}" -maxdepth 1 -type f -name "voxtype-bin-${version}-*.pkg.tar.*" -print -quit 2>/dev/null)"
+  if [[ -z "$artifact" ]]; then
+    say "Skipping live VoxType removal: no exact cached $version package is available for recovery."
+    return 0
+  fi
+
+  recovery="$STATE_ROOT/voxtype-recovery/$(date -u +%Y%m%dT%H%M%SZ)"
+  VOXTYPE_RECOVERY="$recovery"
+  mkdir -p -- "$recovery"
+  enabled="disabled"
+  active="inactive"
+  if command -v systemctl >/dev/null 2>&1; then
+    enabled="$(systemctl --user is-enabled voxtype.service 2>/dev/null || printf disabled)"
+    active="$(systemctl --user is-active voxtype.service 2>/dev/null || printf inactive)"
+  fi
+  jq -n --arg enabled "$enabled" --arg active "$active" '{enabled:$enabled,active:$active}' >"$recovery/service-state.json"
+  VOXTYPE_RECOVERY_ACTIVE=true
+  for path in "$HOME/.config/systemd/user/voxtype.service" "$HOME/.config/voxtype" "$HOME/.local/share/voxtype"; do
+    if [[ -e "$path" ]]; then
+      relative="${path#/}"
+      mkdir -p -- "$recovery/files/$(dirname -- "$relative")"
+      cp -a --reflink=auto -- "$path" "$recovery/files/$relative"
+    fi
+  done
+  cp -a -- "$artifact" "$recovery/"
+  systemctl --user disable --now voxtype.service >/dev/null 2>&1 || true
+  if [[ -n "${BLIZL_HANDY_VOXTYPE_REMOVE_BIN:-}" ]]; then
+    "$BLIZL_HANDY_VOXTYPE_REMOVE_BIN" voxtype-bin
+  else
+    sudo pacman -R --noconfirm voxtype-bin
+  fi
+  VOXTYPE_REMOVED=true
+  systemctl --user daemon-reload
+}
+
+voxtype_restore() {
+  local artifact path relative enabled active install_bin
+  [[ -n "$VOXTYPE_RECOVERY" && -d "$VOXTYPE_RECOVERY" ]] || return 1
+  artifact="$(find "$VOXTYPE_RECOVERY" -maxdepth 1 -type f -name 'voxtype-bin-*.pkg.tar.*' -print -quit)"
+  [[ -f "$artifact" ]] || return 1
+  install_bin="${BLIZL_HANDY_VOXTYPE_INSTALL_BIN:-}"
+  if [[ -n "$install_bin" ]]; then
+    "$install_bin" "$artifact"
+  else
+    sudo pacman -U --noconfirm "$artifact"
+  fi
+  while IFS= read -r path; do
+    relative="${path#/}"
+    if [[ -e "$VOXTYPE_RECOVERY/files/$relative" || -L "$VOXTYPE_RECOVERY/files/$relative" ]]; then
+      rm -rf -- "$path"
+      mkdir -p -- "$(dirname -- "$path")"
+      cp -a --reflink=auto -- "$VOXTYPE_RECOVERY/files/$relative" "$path"
+    fi
+  done < <(printf '%s\n' "$HOME/.config/systemd/user/voxtype.service" "$HOME/.config/voxtype" "$HOME/.local/share/voxtype")
+  enabled="$(jq -r '.enabled' "$VOXTYPE_RECOVERY/service-state.json")"
+  active="$(jq -r '.active' "$VOXTYPE_RECOVERY/service-state.json")"
+  if [[ "$enabled" == enabled ]]; then
+    systemctl --user enable voxtype.service
+    if [[ "$active" == active ]]; then
+      systemctl --user start voxtype.service
+    else
+      systemctl --user stop voxtype.service
+    fi
+  else
+    systemctl --user disable --now voxtype.service
+  fi
+  systemctl --user daemon-reload
+  VOXTYPE_REMOVED=false
+}
+
+main() {
+  preflight
+  mkdir -p -- "$STATE_ROOT"
+  if [[ -f "$INSTALL_FILE" ]]; then
+    jq -e '.transaction and .shortcut' "$INSTALL_FILE" >/dev/null || fail "existing setup record is malformed"
+    say "Handy dictation is already configured; leaving its managed binding unchanged."
+    return 0
+  fi
+
+  transaction_begin "$STATE_ROOT"
+  CREATED_TRANSACTION=true
+  transaction_backup "$BINDINGS_FILE"
+  transaction_backup "$SETTINGS_FILE"
+  transaction_backup "$AUTOSTART_FILE"
+  transaction_backup "$INSTALL_FILE"
+
+  install_handy
+  launch_onboarding
+  [[ -f "$SETTINGS_FILE" ]] || fail "Handy settings do not exist; finish onboarding first"
+  select_shortcut
+  configure_handy_binding
+  configure_binding
+  configure_autostart
+  validate_reload
+  start_handy_hidden
+  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$HANDY_RESERVED_BINDING" ]] || fail "Handy did not register the reserved shortcut"
+  dictation_test
+
+  jq -n \
+    --arg version "1" \
+    --arg transaction "$TRANSACTION_DIR" \
+    --arg shortcut "$SELECTED_SHORTCUT" \
+    --arg reserved "$HANDY_RESERVED_BINDING" \
+    --argjson handyInstalled "$HANDY_INSTALLED" \
+    --arg installedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{version: ($version | tonumber), transaction: $transaction, shortcut: $shortcut, reservedBinding: $reserved, handyInstalled: $handyInstalled, installedAt: $installedAt}' \
+    >"$INSTALL_FILE"
+  maybe_remove_voxtype
+  COMMITTED=true
+  say "Handy dictation setup complete. Push-to-talk: $SELECTED_SHORTCUT"
+}
+
+main "$@"

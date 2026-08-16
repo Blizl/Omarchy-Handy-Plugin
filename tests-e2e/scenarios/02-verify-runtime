@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command -v handy >/dev/null
+command -v wpctl >/dev/null
+
+handy --help 2>&1 | grep -F -- '--toggle-transcription' >/dev/null
+wpctl inspect @DEFAULT_AUDIO_SOURCE@ >/dev/null
