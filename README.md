@@ -97,6 +97,42 @@ omarchy plugin remove blizl.handy
 The uninstaller restores the previous Hyprland bindings, Handy shortcut, and
 autostart file. It does not remove Handy, downloaded models, or VoxType.
 
+To remove the plugin and Handy completely and return to native Omarchy
+VoxType, use the all-in-one recovery command instead. This interactive form
+asks whether to preserve the pre-plugin VoxType bindings or use stock Omarchy
+bindings:
+
+```bash
+~/.config/omarchy/plugins/blizl.handy/bin/restore-voxtype
+```
+
+One-line reset that preserves the previous VoxType bindings:
+
+```bash
+~/.config/omarchy/plugins/blizl.handy/bin/restore-voxtype --yes --bindings previous
+```
+
+One-line reset to stock Omarchy bindings (`F9` push-to-talk and
+`Super+Ctrl+X` toggle):
+
+```bash
+~/.config/omarchy/plugins/blizl.handy/bin/restore-voxtype --yes --bindings stock
+```
+
+When running directly from this repository checkout, replace the path above
+with `./bin/restore-voxtype`. Pass `--keep-plugin` if the checkout should stay
+installed after the reset, or `--keep-handy-data` to retain Handy's settings,
+recordings, and downloaded model caches.
+
+This creates a verified E2E checkpoint and a separate archive of Handy's user
+data, restores the pre-plugin bindings when available, installs or recovers
+VoxType, restores the stock `omarchy.indicators` widget, removes Handy and its
+model caches, validates Hyprland, and finally removes the plugin checkout. It
+asks whether to preserve the pre-plugin VoxType keybindings or restore
+Omarchy's defaults—hold `F9` for push-to-talk, or press `Super+Ctrl+X` to
+toggle dictation. It does not stage, commit, push, or otherwise modify dotfiles
+Git history.
+
 ## Safe end-to-end testing
 
 Live testing must begin with a verified checkpoint:

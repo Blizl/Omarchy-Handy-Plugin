@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ROOT="${BLIZL_HANDY_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+# Resolved from the plugin directory before it can remove its own checkout.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/bindings.sh"
+
+STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
+INSTALL_FILE="$STATE_ROOT/install.json"
+BINDINGS_FILE="${HYPR_BINDINGS_FILE:-$HOME/.config/hypr/bindings.lua}"
+SHELL_FILE="${OMARCHY_SHELL_FILE:-$HOME/.config/omarchy/shell.json}"
+VOXTYPE_CONFIG="${VOXTYPE_CONFIG_FILE:-$HOME/.config/voxtype/config.toml}"
+OMARCHY_ROOT="${OMARCHY_PATH:-/usr/share/omarchy}"
+ASSUME_YES=false
+KEEP_PLUGIN=false
+KEEP_HANDY_DATA=false
+BINDING_MODE="${BLIZL_HANDY_BINDINGS_MODE:-}"
+CHECKPOINT_ID=''
+RECOVERY_DIR=''
+
+say() { printf '\n==> %s\n' "$*"; }
+fail() {
+  printf 'restore-voxtype: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: restore-voxtype [--yes] [--bindings previous|stock]
+                        [--keep-plugin] [--keep-handy-data]
+
+Remove the blizl.handy integration and Handy application, then restore native
+Omarchy VoxType dictation. A recovery checkpoint is created first.
+
+  --yes              Skip the confirmation prompt
+  --bindings MODE    Preserve previous bindings or use stock Omarchy bindings
+  --keep-plugin      Leave the blizl.handy plugin checkout installed
+  --keep-handy-data  Preserve Handy settings, recordings, and model caches
+USAGE
+}
+
+confirm() {
+  [[ "$ASSUME_YES" == true || "${BLIZL_HANDY_CONFIRM:-}" == yes ]] && return 0
+  [[ -t 0 && -t 1 ]] || fail "confirmation is required; rerun with --yes"
+  if command -v gum >/dev/null 2>&1; then
+    gum confirm "Remove Handy and restore native Omarchy VoxType?"
+  else
+    local answer
+    read -r -p "Remove Handy and restore native Omarchy VoxType? [y/N] " answer
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+  fi
+}
+
+parse_args() {
+  while (($#)); do
+    case "$1" in
+      --yes | -y) ASSUME_YES=true ;;
+      --bindings)
+        (($# >= 2)) || fail "--bindings requires previous or stock"
+        BINDING_MODE="$2"
+        shift
+        ;;
+      --keep-plugin) KEEP_PLUGIN=true ;;
+      --keep-handy-data) KEEP_HANDY_DATA=true ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *) fail "unknown option: $1" ;;
+    esac
+    shift
+  done
+}
+
+select_binding_mode() {
+  case "$BINDING_MODE" in
+    previous | stock) return 0 ;;
+    '') ;;
+    *) fail "binding mode must be previous or stock" ;;
+  esac
+
+  [[ -t 0 && -t 1 ]] || fail "choose --bindings previous or --bindings stock"
+  if command -v gum >/dev/null 2>&1; then
+    local selected
+    selected="$(gum choose \
+      "Preserve previous VoxType keybindings" \
+      "Use stock Omarchy keybindings (F9 / Super+Ctrl+X)" \
+      --header="Which VoxType keybindings should be restored?")" || fail "binding selection cancelled"
+    case "$selected" in
+      "Preserve previous"*) BINDING_MODE=previous ;;
+      "Use stock"*) BINDING_MODE=stock ;;
+      *) fail "binding selection cancelled" ;;
+    esac
+  else
+    local choice
+    printf 'Which VoxType keybindings should be restored?\n'
+    printf '  1. Preserve the previous VoxType keybindings\n'
+    printf '  2. Use stock Omarchy: hold F9, or toggle with Super+Ctrl+X\n'
+    read -r -p 'Selection [1]: ' choice
+    case "${choice:-1}" in
+      1) BINDING_MODE=previous ;;
+      2) BINDING_MODE=stock ;;
+      *) fail "invalid binding selection" ;;
+    esac
+  fi
+}
+
+preflight() {
+  local command
+  for command in jq mktemp tar pacman systemctl omarchy; do
+    command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"
+  done
+  [[ -f "$BINDINGS_FILE" ]] || fail "Hyprland bindings file not found: $BINDINGS_FILE"
+  [[ -f "$SHELL_FILE" ]] || fail "Omarchy shell config not found: $SHELL_FILE"
+  [[ -f "$OMARCHY_ROOT/default/voxtype/config.toml" ]] || fail "stock VoxType config not found under $OMARCHY_ROOT"
+  jq -e 'type == "object" and (.bar.layout | type == "object")' "$SHELL_FILE" >/dev/null ||
+    fail "Omarchy shell config is malformed: $SHELL_FILE"
+  bindings_validate "$BINDINGS_FILE" || fail "Hyprland bindings contain an incomplete blizl.handy block"
+}
+
+create_recovery() {
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  RECOVERY_DIR="$STATE_ROOT/restore-voxtype/$stamp"
+  mkdir -p -- "$RECOVERY_DIR"
+
+  if [[ "${BLIZL_HANDY_SKIP_CHECKPOINT:-false}" != true ]]; then
+    CHECKPOINT_ID="$("$PLUGIN_ROOT/bin/e2e-checkpoint" create)" || fail "could not create recovery checkpoint"
+    "$PLUGIN_ROOT/bin/e2e-checkpoint" verify "$CHECKPOINT_ID" || fail "recovery checkpoint verification failed"
+  fi
+
+  if [[ -d "$HOME/.local/share/com.pais.handy" ]]; then
+    tar -czf "$RECOVERY_DIR/handy-user-data.tar.gz" -C "$HOME" .local/share/com.pais.handy
+    sha256sum "$RECOVERY_DIR/handy-user-data.tar.gz" >"$RECOVERY_DIR/handy-user-data.sha256"
+  fi
+  printf '%s\n' "${CHECKPOINT_ID:-none}" >"$RECOVERY_DIR/checkpoint-id"
+}
+
+restore_plugin_transaction() {
+  if [[ -f "$INSTALL_FILE" ]]; then
+    say "Restoring the pre-plugin bindings and autostart state"
+    "$PLUGIN_ROOT/bin/uninstall"
+  elif grep -Fq -- "$HANDY_BINDINGS_BEGIN" "$BINDINGS_FILE"; then
+    say "Removing an orphaned blizl.handy binding block"
+    local temporary
+    temporary="$(mktemp "${BINDINGS_FILE}.tmp.XXXXXX")"
+    bindings_remove_managed_block "$BINDINGS_FILE" "$temporary"
+    chmod --reference="$BINDINGS_FILE" "$temporary"
+    mv -- "$temporary" "$BINDINGS_FILE"
+  fi
+  pkill -x handy >/dev/null 2>&1 || true
+}
+
+latest_voxtype_recovery() {
+  find "$STATE_ROOT/voxtype-recovery" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null |
+    sort -r | head -n1
+}
+
+install_package_file() {
+  local artifact="$1"
+  if [[ -n "${BLIZL_HANDY_VOXTYPE_INSTALL_BIN:-}" ]]; then
+    "$BLIZL_HANDY_VOXTYPE_INSTALL_BIN" "$artifact"
+  else
+    sudo pacman -U --noconfirm "$artifact"
+  fi
+}
+
+install_native_packages() {
+  if [[ -n "${BLIZL_HANDY_PKG_ADD_BIN:-}" ]]; then
+    "$BLIZL_HANDY_PKG_ADD_BIN" wtype voxtype-bin
+  else
+    omarchy pkg add wtype voxtype-bin
+  fi
+}
+
+restore_voxtype_recovery() {
+  local recovery="$1" artifact path relative
+  artifact="$(find "$recovery" -maxdepth 1 -type f -name 'voxtype-bin-*.pkg.tar.*' ! -name '*.sig' -print -quit)"
+  [[ -f "$artifact" ]] || return 1
+  install_package_file "$artifact"
+
+  for path in "$HOME/.config/systemd/user/voxtype.service" "$HOME/.config/voxtype" "$HOME/.local/share/voxtype"; do
+    relative="${path#/}"
+    if [[ -e "$recovery/files/$relative" || -L "$recovery/files/$relative" ]]; then
+      rm -rf -- "$path"
+      mkdir -p -- "$(dirname -- "$path")"
+      cp -a --reflink=auto -- "$recovery/files/$relative" "$path"
+    fi
+  done
+}
+
+ensure_voxtype() {
+  local recovery='' used_recovery=false
+  say "Installing native Omarchy VoxType"
+  if ! pacman -Q voxtype-bin >/dev/null 2>&1; then
+    recovery="$(latest_voxtype_recovery || true)"
+    if [[ -n "$recovery" ]] && restore_voxtype_recovery "$recovery"; then
+      used_recovery=true
+      say "Restored the exact pre-plugin VoxType package and data"
+    else
+      install_native_packages
+    fi
+  fi
+  pacman -Q voxtype-bin >/dev/null 2>&1 || fail "VoxType package installation failed"
+
+  if [[ "$BINDING_MODE" == stock ]]; then
+    # Stock mode intentionally overwrites a custom native hotkey.
+    install -Dm0644 "$OMARCHY_ROOT/default/voxtype/config.toml" "$VOXTYPE_CONFIG"
+  elif [[ ! -f "$VOXTYPE_CONFIG" ]]; then
+    say "No previous VoxType config was recoverable; using stock bindings"
+    BINDING_MODE=stock
+    install -Dm0644 "$OMARCHY_ROOT/default/voxtype/config.toml" "$VOXTYPE_CONFIG"
+  fi
+
+  if ! find "$HOME/.local/share/voxtype/models" -maxdepth 1 -type f \
+    \( -name '*.bin' -o -name '*.onnx' \) -print -quit 2>/dev/null | grep -q .; then
+    if [[ "${BLIZL_HANDY_SKIP_MODEL_SETUP:-false}" != true ]]; then
+      say "Downloading VoxType's native speech model"
+      voxtype setup --download --no-post-install
+    fi
+  fi
+
+  if [[ "$used_recovery" != true ]]; then
+    if command -v omarchy-hw-vulkan >/dev/null 2>&1 && omarchy-hw-vulkan; then
+      voxtype setup gpu --enable || true
+    fi
+    voxtype setup systemd
+  fi
+  systemctl --user daemon-reload
+  systemctl --user enable --now voxtype.service
+}
+
+restore_stock_voxtype_bindings() {
+  local temporary
+  temporary="$(mktemp "${BINDINGS_FILE}.tmp.XXXXXX")"
+  awk '
+    /^-- Dictation push-to-talk is ALT\+SPACE via (Handy|voxtype)/ {
+      old_dictation_comment = 1
+      next
+    }
+    old_dictation_comment {
+      if ($0 == "hl.unbind(\"F9\")") {
+        old_dictation_comment = 0
+        next
+      }
+      if ($0 ~ /^--/ || $0 ~ /^[[:space:]]*$/) next
+      old_dictation_comment = 0
+    }
+    $0 == "hl.unbind(\"F9\")" { next }
+    { print }
+  ' "$BINDINGS_FILE" >"$temporary"
+  chmod --reference="$BINDINGS_FILE" "$temporary"
+  mv -- "$temporary" "$BINDINGS_FILE"
+}
+
+restore_stock_indicator() {
+  local temporary
+  temporary="$(mktemp "${SHELL_FILE}.tmp.XXXXXX")"
+  jq '
+    .bar.layout |= (
+      with_entries(
+        .value |= map(
+          select(.id != "blizl.handy")
+          | if .id == "vliang.indicators" then .id = "omarchy.indicators" else . end
+        )
+      )
+    )
+    | if ([.bar.layout[][] | select(.id == "omarchy.indicators")] | length) == 0
+      then .bar.layout.center = ([{"id":"omarchy.indicators"}] + .bar.layout.center)
+      else .
+      end
+  ' "$SHELL_FILE" >"$temporary"
+  chmod --reference="$SHELL_FILE" "$temporary"
+  mv -- "$temporary" "$SHELL_FILE"
+}
+
+remove_legacy_handy_indicator() {
+  local legacy="$HOME/.config/omarchy/plugins/vliang.indicators"
+  if [[ -f "$legacy/indicators/Dictation.qml" ]] &&
+    grep -Fq 'handy-status-follow' "$legacy/indicators/Dictation.qml"; then
+    if [[ -e "$legacy/.git" ]]; then
+      rm -rf -- "$legacy"
+    else
+      mv -- "$legacy" "$RECOVERY_DIR/vliang.indicators"
+    fi
+  fi
+}
+
+remove_handy() {
+  say "Removing Handy"
+  if [[ -n "${BLIZL_HANDY_PKG_DROP_BIN:-}" ]]; then
+    "$BLIZL_HANDY_PKG_DROP_BIN" handy-bin handy-bin-debug
+  else
+    omarchy pkg drop handy-bin handy-bin-debug
+  fi
+  pacman -Q handy-bin >/dev/null 2>&1 && fail "Handy package is still installed"
+
+  [[ "$KEEP_HANDY_DATA" == true ]] && return 0
+  rm -rf -- \
+    "$HOME/.local/share/com.pais.handy" \
+    "$HOME/.cache/huggingface/hub/models--handy-computer--parakeet-tdt-0.6b-v2-gguf" \
+    "$HOME/.cache/huggingface/hub/models--handy-computer--parakeet-tdt-0.6b-v3-gguf" \
+    "$HOME/.cache/huggingface/hub/models--handy-computer--parakeet-unified-en-0.6b-gguf"
+  rm -f -- \
+    "$HOME/.config/autostart/Handy.desktop" \
+    "$HOME/.local/bin/handy-status-follow" \
+    "$HOME/.local/bin/handy-dictation-setup"
+}
+
+validate_runtime() {
+  say "Validating the native Omarchy state"
+  if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null 2>&1; then
+    hyprctl reload >/dev/null
+    local errors
+    errors="$(hyprctl configerrors)"
+    [[ -z "$errors" ]] || fail "Hyprland configuration errors: $errors"
+  fi
+  omarchy restart shell
+  [[ "$(systemctl --user is-enabled voxtype.service 2>/dev/null)" == enabled ]] || fail "VoxType service is not enabled"
+  [[ "$(systemctl --user is-active voxtype.service 2>/dev/null)" == active ]] || fail "VoxType service is not active"
+  command -v voxtype >/dev/null 2>&1 || fail "VoxType executable is missing"
+  jq -e '[.bar.layout[][] | select(.id == "blizl.handy" or .id == "vliang.indicators")] | length == 0' "$SHELL_FILE" >/dev/null ||
+    fail "Handy-era bar widgets remain configured"
+  jq -e '[.bar.layout[][] | select(.id == "omarchy.indicators")] | length == 1' "$SHELL_FILE" >/dev/null ||
+    fail "stock Omarchy indicators are not configured exactly once"
+}
+
+remove_plugin() {
+  [[ "$KEEP_PLUGIN" == true || "${BLIZL_HANDY_SKIP_PLUGIN_REMOVE:-false}" == true ]] && return 0
+  local installed="$HOME/.config/omarchy/plugins/blizl.handy"
+  if [[ -e "$installed" || -L "$installed" ]]; then
+    omarchy plugin remove blizl.handy --yes
+  fi
+}
+
+main() {
+  parse_args "$@"
+  preflight
+  select_binding_mode
+  confirm || fail "cancelled"
+  create_recovery
+  restore_plugin_transaction
+  ensure_voxtype
+  if [[ "$BINDING_MODE" == stock ]]; then
+    restore_stock_voxtype_bindings
+  fi
+  restore_stock_indicator
+  remove_legacy_handy_indicator
+  remove_handy
+  validate_runtime
+  remove_plugin
+
+  say "Native Omarchy VoxType is restored"
+  printf 'Recovery data: %s\n' "$RECOVERY_DIR"
+  if [[ -n "$CHECKPOINT_ID" ]]; then
+    printf 'Checkpoint: %s\n' "$CHECKPOINT_ID"
+  fi
+  if [[ "$BINDING_MODE" == stock ]]; then
+    printf 'Bindings: stock Omarchy (hold F9, or press Super+Ctrl+X to toggle).\n'
+  else
+    printf 'Bindings: restored from the pre-plugin configuration.\n'
+  fi
+}
+
+main "$@"
