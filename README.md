@@ -115,15 +115,18 @@ default microphone exists sends a notification instead.
 Push-to-talk shortcuts (such as `ALT + SPACE`, `ALT + ENTER`, `SUPER + SPACE`, or custom chords)
 leverage Handy's native kernel-level evdev engine (`handy_keys`):
 
+- **Solves Modifier Release Order Dropping**: Standard Wayland and Hyprland release bindings
+  (`bindr` / `{ release = true }`) only trigger if the base key is released while all modifier keys
+  are still held down. If a user naturally lets go of `Alt` a millisecond before `Space` (or vice versa),
+  compositor bindings drop the release event completely, leaving the microphone running indefinitely.
+  `blizl.handy` resolves this entirely: Handy's native evdev engine tracks key state directly from the
+  kernel and stops recording the exact moment **either** `Alt` or `Space`/`Enter` is released.
 - **Direct Kernel-Level Hotkeys**: Handy connects directly to Linux input devices (`/dev/input/event*`)
   via its native Rust `handy_keys` engine, matching Omarchy's native VoxType architecture.
-- **Modifier Release Parity**: Key release is captured directly from the kernel regardless of key
-  release order (e.g. releasing `Alt` before `Space` or `Enter`), ensuring dictation stops and transcribes
-  immediately every time.
-- **Zero Compositor Interference**: Hyprland unbinds conflicting shortcuts (`hl.unbind(...)`) so
-  compositor grabs do not intercept or drop modifier release events.
-- **Zero Idle Wrapper Overhead**: Eliminates external wrapper layers, timeouts, and daemons for instant,
-  100% reliable voice typing.
+- **Zero Compositor Interference**: Hyprland cleanly unbinds conflicting shortcuts (`hl.unbind(...)`) so
+  compositor key grabs never swallow or intercept modifier transitions.
+- **Zero Idle Wrapper Overhead**: Eliminates external wrapper scripts, timeouts, and background daemons
+  for instant, 100% reliable voice typing.
 
 ## Remove the integration
 
