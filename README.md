@@ -6,6 +6,8 @@ shows capture state directly from PipeWire, provides modifier release safety for
 multi-key shortcuts, and prevents a key release from starting Handy when its
 matching key press was rejected.
 
+![Handy Settings Preview](assets/handy-settings.png)
+
 ## About Handy
 
 [Handy](https://github.com/cjpais/Handy) is a free and open-source desktop
