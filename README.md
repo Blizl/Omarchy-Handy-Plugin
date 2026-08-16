@@ -20,6 +20,41 @@ language and transcription settings, and transcript history. This plugin adds
 the Omarchy-specific Quickshell microphone indicator, push-to-talk bindings,
 missing-microphone handling, and reversible setup around that upstream app.
 
+### Supported languages
+
+Language support depends on the model selected in Handy; this plugin does not
+add or remove languages. Handy shows only the language choices supported by the
+active model and offers automatic detection when that model provides it.
+
+- Multilingual Whisper models support 99 languages. Whisper Large v3 and Large
+  v3 Turbo also support Cantonese.
+- Parakeet TDT 0.6B v3 supports Bulgarian, Croatian, Czech, Danish, Dutch,
+  English, Estonian, Finnish, French, German, Greek, Hungarian, Italian,
+  Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak,
+  Slovenian, Spanish, Swedish, and Ukrainian.
+- Parakeet Unified EN and Parakeet TDT 0.6B v2 support English only.
+- Other models available through Handy have their own language lists. Handy's
+  model and language settings are the authoritative source for the installed
+  version.
+
+<details>
+<summary>All 99 languages supported by multilingual Whisper models</summary>
+
+English, Chinese, German, Spanish, Russian, Korean, French, Japanese,
+Portuguese, Turkish, Polish, Catalan, Dutch, Arabic, Swedish, Italian,
+Indonesian, Hindi, Finnish, Vietnamese, Hebrew, Ukrainian, Greek, Malay, Czech,
+Romanian, Danish, Hungarian, Tamil, Norwegian, Thai, Urdu, Croatian, Bulgarian,
+Lithuanian, Latin, Maori, Malayalam, Welsh, Slovak, Telugu, Persian, Latvian,
+Bengali, Serbian, Azerbaijani, Slovenian, Kannada, Estonian, Macedonian, Breton,
+Basque, Icelandic, Armenian, Nepali, Mongolian, Bosnian, Kazakh, Albanian,
+Swahili, Galician, Marathi, Punjabi, Sinhala, Khmer, Shona, Yoruba, Somali,
+Afrikaans, Occitan, Georgian, Belarusian, Tajik, Sindhi, Gujarati, Amharic,
+Yiddish, Lao, Uzbek, Faroese, Haitian Creole, Pashto, Turkmen, Nynorsk, Maltese,
+Sanskrit, Luxembourgish, Myanmar, Tibetan, Tagalog, Malagasy, Assamese, Tatar,
+Hawaiian, Lingala, Hausa, Bashkir, Javanese, and Sundanese.
+
+</details>
+
 ## Install
 
 ```bash
