@@ -63,15 +63,26 @@ release() {
   fi
 }
 
+stop() {
+  rm -f -- "$armed_file"
+
+  if ! "$handy_bin" --toggle-transcription; then
+    "$handy_bin" --cancel >/dev/null 2>&1 || true
+    notify_stop_failure
+    return 1
+  fi
+}
+
 exec 9>"$lock_file"
 flock -x 9
 
 case "${1:-}" in
   press) press ;;
   release) release ;;
+  stop) stop ;;
   notify-missing-mic) notify_missing_microphone ;;
   *)
-    echo "Usage: handy-trigger {press|release|notify-missing-mic}" >&2
+    echo "Usage: handy-trigger {press|release|stop|notify-missing-mic}" >&2
     exit 64
     ;;
 esac

@@ -53,7 +53,11 @@ case "${1:-}" in
     printf '%s\n' "$((count + 1))" >"$TOGGLE_COUNT"
     exit "${HANDY_TOGGLE_STATUS:-0}"
     ;;
-  --cancel) : >"$CANCELLED"; exit 0 ;;
+  --cancel)
+    status=${HANDY_CANCEL_STATUS:-0}
+    [[ "$status" == 0 ]] && : >"$CANCELLED"
+    exit "$status"
+    ;;
 esac
 exit 64
 EOF
@@ -72,7 +76,7 @@ EOF
   export BLIZL_HANDY_RUNTIME_DIR="$FIXTURE/runtime"
   : >"$NOTIFY_LOG"
   printf '0\n' >"$TOGGLE_COUNT"
-  : >"$CANCELLED"
+  rm -f -- "$CANCELLED"
   rm -f -- "$HANDY_RUNNING"
   unset HANDY_START_STATUS HANDY_TOGGLE_STATUS
   unset WPCTL_STATUS
@@ -245,6 +249,40 @@ test_release_failure_cancels_and_notifies() {
   grep -q 'Handy could not finish dictation' "$NOTIFY_LOG"
 }
 
+test_stop_finishes_without_canceling() {
+  microphone_fixture
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  run_trigger stop
+  assert_status 0 "$RUN_STATUS" || return 1
+  [[ ! -e "$CANCELLED" ]] || return 1
+  [[ $(<"$TOGGLE_COUNT") == 2 ]] || return 1
+  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+}
+
+test_stop_without_marker_still_toggles() {
+  microphone_fixture
+  run_trigger stop
+  assert_status 0 "$RUN_STATUS" || return 1
+  [[ $(<"$TOGGLE_COUNT") == 1 ]] || return 1
+  [[ ! -e "$CANCELLED" ]] || return 1
+  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+}
+
+test_stop_failure_cancels_and_notifies() {
+  microphone_fixture
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  HANDY_TOGGLE_STATUS=1
+  export HANDY_TOGGLE_STATUS
+  run_trigger stop
+  assert_status 1 "$RUN_STATUS" || return 1
+  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+  [[ -e "$CANCELLED" ]] || return 1
+  [[ $(<"$TOGGLE_COUNT") == 2 ]] || return 1
+  grep -q 'Handy could not finish dictation' "$NOTIFY_LOG"
+}
+
 for test_name in \
   test_real_microphone_is_available \
   test_muted_microphone_is_still_available_to_trigger \
@@ -260,7 +298,10 @@ for test_name in \
   test_parallel_press_only_toggles_once \
   test_start_failure_notifies_and_does_not_arm \
   test_toggle_failure_notifies_and_does_not_arm \
-  test_release_failure_cancels_and_notifies; do
+  test_release_failure_cancels_and_notifies \
+  test_stop_finishes_without_canceling \
+  test_stop_without_marker_still_toggles \
+  test_stop_failure_cancels_and_notifies; do
   run_test "$test_name"
 done
 

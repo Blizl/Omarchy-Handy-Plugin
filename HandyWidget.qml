@@ -55,9 +55,9 @@ BarWidget {
   }
 
   function tooltipFor(value) {
+    if (root.handyRecording) return "Handy is recording — click to stop"
     if (value === "missing") return "Microphone not detected"
     if (value === "muted") return "Microphone muted"
-    if (value === "recording") return "Handy is recording"
     if (value === "in-use") return "Microphone in use"
     return "Microphone available"
   }
@@ -82,6 +82,8 @@ BarWidget {
       if (!root.bar) return
       if (button === Qt.MiddleButton)
         root.bar.run("omarchy-shell shell toggle omarchy.audio")
+      else if (button === Qt.LeftButton && root.handyRecording)
+        root.bar.run(root.triggerCommand("stop"))
       else if (root.state === "missing")
         root.bar.run(root.triggerCommand("notify-missing-mic"))
       else

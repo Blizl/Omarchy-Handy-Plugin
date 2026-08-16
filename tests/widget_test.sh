@@ -53,8 +53,12 @@ test_glyph_and_click_actions() {
   contains 'text: root.icon' || return 1
   contains 'state === "missing" || state === "muted"' || return 1
   contains 'Qt.MiddleButton' || return 1
+  contains 'Qt.LeftButton' || return 1
+  contains 'button === Qt.LeftButton && root.handyRecording' || return 1
+  contains 'if (root.handyRecording) return "Handy is recording — click to stop"' || return 1
   contains 'omarchy-shell shell toggle omarchy.audio' || return 1
   contains 'notify-missing-mic' || return 1
+  contains 'triggerCommand("stop")' || return 1
   contains 'uwsm-app -- handy' || return 1
 }
 

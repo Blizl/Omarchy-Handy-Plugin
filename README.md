@@ -62,18 +62,29 @@ omarchy plugin add https://github.com/Blizl/Omarchy-Handy-Plugin.git --enable \
   && ~/.config/omarchy/plugins/blizl.handy/bin/setup
 ```
 
+After updating an existing v1 installation, run
+`~/.config/omarchy/plugins/blizl.handy/bin/setup` again. It first restores the
+previous integration, then reapplies the latest conflict-safe setup so
+uninstall still returns the machine to its original state.
+
 Setup opens Handy's official onboarding for model selection. It then asks which
 push-to-talk shortcut to own, moves Handy's internal shortcut to a reserved
-chord, disables VoxType's native hotkey when present, and unbinds any stock
-VoxType action on the selected key. Setup then opens a focused test window where
-the user dictates one line. It commits only when that window receives non-empty
-text.
+chord, disables VoxType's native hotkey, and unbinds all detected user and stock
+VoxType shortcuts. If the selected Handy shortcut overlaps a VoxType shortcut,
+setup warns before changing anything and requires explicit confirmation.
+VoxType may remain installed, but Handy becomes Omarchy's only active dictation
+integration until uninstall restores the previous controls.
+
+Setup also replaces the built-in center Dictation indicator with Handy, then
+opens a focused test window that clearly identifies Handy as the engine. It
+commits only when that window receives non-empty dictated text.
 
 If the dictation test fails or the test window closes without text, setup
-restores the previous bindings, Handy and VoxType shortcut settings, autostart,
-and process state. It then disables and removes the installed `blizl.handy`
-plugin, avoiding a partially configured integration. VoxType removal is never
-the default and is offered only after the dictation test succeeds.
+restores the previous bindings, shell layout, Handy and VoxType shortcut
+settings, autostart, and process state. It then disables and removes the
+installed `blizl.handy` plugin, avoiding a partially configured integration.
+VoxType removal is never the default and is offered only after the dictation
+test succeeds.
 
 Supported shortcut choices are a detected VoxType shortcut, `ALT + SPACE`, or a
 custom Omarchy shortcut. Replacing a non-VoxType action requires confirmation.
@@ -89,8 +100,11 @@ The widget reads Quickshell's PipeWire objects; it does not tail logs or keep a
 4. another application capturing audio
 5. microphone available
 
-Left-click opens Handy. Middle-click opens Omarchy's audio panel. Clicking while
-no default microphone exists sends a notification instead.
+Left-click opens Handy when it is idle. While Handy is recording, left-click is
+an emergency stop that finishes the active dictation and preserves its text. If
+Handy cannot finish it, the trigger cancels the recording and sends a failure
+notification. Middle-click opens Omarchy's audio panel. Clicking while no
+default microphone exists sends a notification instead.
 
 ## Remove the integration
 
@@ -101,9 +115,9 @@ Run the plugin's uninstaller before removing its checkout:
 omarchy plugin remove blizl.handy
 ```
 
-The uninstaller restores the previous Hyprland bindings, Handy shortcut,
-VoxType native-hotkey setting, and autostart file. It does not remove Handy,
-downloaded models, or VoxType.
+The uninstaller restores the previous Hyprland bindings, center indicators,
+Handy shortcut, VoxType native-hotkey setting, and autostart file. It does not
+remove Handy, downloaded models, or VoxType.
 
 To remove the plugin and Handy completely and return to native Omarchy
 VoxType, use the all-in-one recovery command instead. This interactive form

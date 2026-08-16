@@ -28,6 +28,46 @@ test_false_and_absent_hotkeys_are_not_enabled() {
   if voxtype_hotkey_enabled "$absent_file"; then fail 'absent hotkey was reported as enabled'; fi
 }
 
+test_reads_native_alt_space_hotkey() {
+  local file="$WORK/alt-space.toml"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "SPACE"' \
+    'modifiers = ["LEFTALT"]' >"$file"
+  assert_eq "$(voxtype_hotkey_shortcut "$file")" 'ALT + SPACE'
+}
+
+test_reads_native_multi_modifier_hotkey() {
+  local file="$WORK/multi-modifier.toml"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "X"' \
+    'modifiers = ["LEFTCTRL", "LEFTSHIFT"]' >"$file"
+  assert_eq "$(voxtype_hotkey_shortcut "$file")" 'CTRL + SHIFT + X'
+}
+
+test_reads_native_alt_enter_hotkey() {
+  local file="$WORK/alt-enter.toml"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "ENTER"' \
+    'modifiers = ["LEFTALT"]' >"$file"
+  assert_eq "$(voxtype_hotkey_shortcut "$file")" 'ALT + ENTER'
+}
+
+test_rejects_malformed_native_hotkey() {
+  local file="$WORK/malformed-hotkey.toml" modifiers="$WORK/malformed-modifiers.toml"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = ENTER' >"$file"
+  if voxtype_hotkey_shortcut "$file" >/dev/null; then
+    fail 'malformed native key was accepted'
+  fi
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "ENTER"' \
+    'modifiers = [LEFTALT]' >"$modifiers"
+  if voxtype_hotkey_shortcut "$modifiers" >/dev/null; then
+    fail 'unquoted native modifier was accepted'
+  fi
+}
+
+test_normalizes_modifier_order_and_spacing() {
+  assert_eq "$(voxtype_shortcut_normalize 'ALT+CTRL+X')" 'CTRL+ALT+X'
+  voxtype_shortcuts_equal 'ALT + CTRL + X' 'CTRL+ALT+X' ||
+    fail 'equivalent modifier chords were not matched'
+}
+
 test_disable_changes_only_true_value_and_is_atomic() {
   local file="$WORK/change.toml" before after expected
   printf '%s\n' '# keep this comment' 'state_file = "auto"' '' '[hotkey]' \
@@ -79,6 +119,11 @@ test_disable_rejects_malformed_hotkey_sections_without_mutating() {
 
 test_reports_enabled_hotkey
 test_false_and_absent_hotkeys_are_not_enabled
+test_reads_native_alt_space_hotkey
+test_reads_native_multi_modifier_hotkey
+test_reads_native_alt_enter_hotkey
+test_rejects_malformed_native_hotkey
+test_normalizes_modifier_order_and_spacing
 test_disable_changes_only_true_value_and_is_atomic
 test_disable_returns_no_change_for_absent_or_false
 test_disable_rejects_malformed_hotkey_sections_without_mutating

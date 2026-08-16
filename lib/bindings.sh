@@ -72,6 +72,22 @@ bindings_detect_voxtype_key() {
   fi
 }
 
+bindings_detect_voxtype_keys() {
+  local bindings_file="$1"
+  shift
+  for bindings_file in "$bindings_file" "$@"; do
+    [[ -f "$bindings_file" ]] || continue
+    perl -0777 -ne '
+      my $source = $_;
+      $source =~ s/--[^\n]*//g;
+      while ($source =~ /o\.bind\(\s*"([^"]+)"\s*,\s*(?:"[^"]*"|nil)\s*,\s*(?:"([^"]*)"|nil)/g) {
+        my ($key, $command) = ($1, $2 // "");
+        print "$key\n" if $command =~ /\bvoxtype\b/i;
+      }
+    ' "$bindings_file"
+  done | sort -u
+}
+
 bindings_action_for_key() {
   local bindings_file="$1"
   local key="$2"
@@ -96,12 +112,19 @@ bindings_write_managed() {
   local key="$2"
   local previous_action="${3:-}"
   local trigger_path="$4"
-  local temporary clean
+  local voxtype_keys="${5:-$key}" managed_key selected_unbound=false temporary clean
 
   [[ "$key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
     echo "Shortcut contains unsupported characters: $key" >&2
     return 1
   }
+  while IFS= read -r managed_key; do
+    [[ -n "$managed_key" ]] || continue
+    [[ "$managed_key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
+      echo "Shortcut contains unsupported characters: $managed_key" >&2
+      return 1
+    }
+  done <<<"$voxtype_keys"
 
   temporary="$(mktemp "${bindings_file}.tmp.XXXXXX")"
   clean="$(mktemp "${bindings_file}.clean.XXXXXX")"
@@ -114,7 +137,13 @@ bindings_write_managed() {
     if [[ -n "$previous_action" ]]; then
       printf '%s\n' "-- Previous action: ${previous_action//$'\n'/ }"
     fi
-    printf 'hl.unbind("%s")\n\n' "$key"
+    while IFS= read -r managed_key; do
+      [[ -n "$managed_key" ]] || continue
+      [[ "$managed_key" == "$key" ]] && selected_unbound=true
+      printf 'hl.unbind("%s")\n' "$managed_key"
+    done <<<"$voxtype_keys"
+    [[ "$selected_unbound" == true ]] || printf 'hl.unbind("%s")\n' "$key"
+    printf '\n'
     printf 'o.bind(\n  "%s",\n  "Start Handy dictation",\n  "%s press"\n)\n\n' "$key" "$trigger_path"
     printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$key" "$trigger_path"
     printf '%s\n' "$HANDY_BINDINGS_END"

@@ -19,10 +19,11 @@ make_fixture() {
   FIXTURE_NUMBER=$((FIXTURE_NUMBER + 1))
   local home="$WORK/home-$FIXTURE_NUMBER" fakebin="$WORK/bin"
   rm -rf -- "$fakebin"
-  mkdir -p "$home/.config/hypr" "$home/.local/share/com.pais.handy" "$home/.config/autostart" "$fakebin"
+  mkdir -p "$home/.config/hypr" "$home/.config/omarchy" "$home/.local/share/com.pais.handy" "$home/.config/autostart" "$fakebin"
   printf 'o.bind("F9", "VoxType push-to-talk", "voxtype")\n' >"$home/.config/hypr/bindings.lua"
   printf '%s\n' '{"settings":{"bindings":{"transcribe":{"current_binding":"alt+space"}},"unrelated":{"keep":true}}}' >"$home/.local/share/com.pais.handy/settings_store.json"
   printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Existing Handy' 'Exec=handy --start-hidden' >"$home/.config/autostart/Handy.desktop"
+  printf '%s\n' '{"bar":{"layout":{"left":[],"center":[{"id":"omarchy.clock"}],"right":[{"id":"omarchy.indicators","items":["Dictation","Dnd"]}]}}}' >"$home/.config/omarchy/shell.json"
   printf '%s\n' '#!/usr/bin/env bash' 'if [[ ${1:-} == --start-hidden ]]; then count=0; [[ -f "$HOME/.handy-start-count" ]] && count=$(<"$HOME/.handy-start-count"); printf "%s\n" "$((count + 1))" >"$HOME/.handy-start-count"; : >"$HOME/.handy-fake-running"; exit 0; fi' 'exit 0' >"$fakebin/handy"
   printf '%s\n' '#!/usr/bin/env bash' 'if [[ ${1:-} == -x && ${2:-} == handy ]]; then [[ -e "$HOME/.handy-fake-running" ]]; exit; fi' 'exec /usr/bin/pgrep "$@"' >"$fakebin/pgrep"
   printf '%s\n' '#!/usr/bin/env bash' 'if [[ ${1:-} == -x && ${2:-} == handy ]]; then rm -f -- "$HOME/.handy-fake-running"; exit 0; fi' 'exec /usr/bin/pkill "$@"' >"$fakebin/pkill"
@@ -33,6 +34,7 @@ make_fixture() {
   export HYPR_BINDINGS_FILE="$home/.config/hypr/bindings.lua"
   export HANDY_SETTINGS_FILE="$home/.local/share/com.pais.handy/settings_store.json"
   export HANDY_AUTOSTART_FILE="$home/.config/autostart/Handy.desktop"
+  export OMARCHY_SHELL_FILE="$home/.config/omarchy/shell.json"
   export VOXTYPE_CONFIG_FILE="$home/.config/voxtype/config.toml"
   export VOXTYPE_BINDINGS_FILE="$home/.stock-voxtype.lua"
   : >"$VOXTYPE_BINDINGS_FILE"
@@ -40,26 +42,49 @@ make_fixture() {
   export BLIZL_HANDY_DICTATION_TEST=passed BLIZL_HANDY_SKIP_RELOAD=true BLIZL_HANDY_CONFIRM=no
   export BLIZL_HANDY_VOXTYPE_PRESENT=false
   unset BLIZL_HANDY_PLUGIN_REMOVE_BIN BLIZL_HANDY_TEST_WINDOW_BIN
+  unset BLIZL_HANDY_CONFIRM_CONFLICT BLIZL_HANDY_REMOVE_VOXTYPE
   unset HYPRLAND_INSTANCE_SIGNATURE
 }
 
 test_setup_uninstall_round_trip() {
   make_fixture
-  local before_bindings before_settings before_autostart
+  local before_bindings before_settings before_autostart before_shell
   before_bindings="$(<"$HYPR_BINDINGS_FILE")"
   before_settings="$(<"$HANDY_SETTINGS_FILE")"
   before_autostart="$(<"$HANDY_AUTOSTART_FILE")"
+  before_shell="$(<"$OMARCHY_SHELL_FILE")"
   "$ROOT/bin/setup"
   "$ROOT/bin/setup" >/dev/null
   assert_file "$BLIZL_HANDY_STATE_DIR/install.json"
   [[ "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$HYPR_BINDINGS_FILE")" == 1 ]] || fail 'managed block missing'
   [[ "$(grep -Fc -- 'Exec=handy --start-hidden' "$HANDY_AUTOSTART_FILE")" == 1 ]] || fail 'autostart changed incorrectly'
+  [[ "$(jq '[.bar.layout[][] | select(.id == "blizl.handy")] | length' "$OMARCHY_SHELL_FILE")" == 1 ]] || fail 'Handy widget was not installed in shell settings'
+  ! jq -e '[.bar.layout[][] | select(.id == "omarchy.indicators") | (.items // [])[]] | any(. == "Dictation")' "$OMARCHY_SHELL_FILE" >/dev/null || fail 'built-in Dictation indicator remained'
   "$ROOT/bin/uninstall"
   assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
   assert_eq "$(<"$HANDY_SETTINGS_FILE")" "$before_settings"
   assert_eq "$(<"$HANDY_AUTOSTART_FILE")" "$before_autostart"
+  assert_eq "$(<"$OMARCHY_SHELL_FILE")" "$before_shell"
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'install marker remained'
   [[ "$(<"$HOME/.handy-start-count")" == 2 ]] || fail 'uninstall did not restart Handy after restoring its shortcut'
+}
+
+test_setup_upgrades_a_v1_install_record() {
+  make_fixture
+  local temporary="$BLIZL_HANDY_STATE_DIR/install.json.tmp"
+  "$ROOT/bin/setup" >/dev/null
+  jq '.version = 1' "$BLIZL_HANDY_STATE_DIR/install.json" >"$temporary"
+  mv -- "$temporary" "$BLIZL_HANDY_STATE_DIR/install.json"
+
+  "$ROOT/bin/setup" >/dev/null
+
+  [[ "$(jq -r '.version' "$BLIZL_HANDY_STATE_DIR/install.json")" == 2 ]] ||
+    fail 'v1 setup record was not upgraded'
+  [[ "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$HYPR_BINDINGS_FILE")" == 1 ]] ||
+    fail 'upgrade duplicated the managed binding block'
+  [[ "$(jq '[.bar.layout[][] | select(.id == "blizl.handy")] | length' "$OMARCHY_SHELL_FILE")" == 1 ]] ||
+    fail 'upgrade did not install the Handy center widget'
+  "$ROOT/bin/uninstall" >/dev/null
 }
 
 test_setup_rejects_incomplete_managed_block() {
@@ -81,6 +106,26 @@ test_setup_rejects_malformed_settings_without_commit() {
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'malformed settings setup committed state'
 }
 
+test_setup_rejects_malformed_shell_settings_without_mutation() {
+  make_fixture
+  local before
+  printf '%s\n' '{"bar":' >"$OMARCHY_SHELL_FILE"
+  before="$(<"$OMARCHY_SHELL_FILE")"
+  if "$ROOT/bin/setup" >/dev/null 2>&1; then fail 'malformed shell settings were accepted'; fi
+  assert_eq "$(<"$OMARCHY_SHELL_FILE")" "$before"
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'malformed shell setup committed state'
+}
+
+test_setup_requires_shell_settings_before_mutating() {
+  make_fixture
+  local before_bindings
+  before_bindings="$(<"$HYPR_BINDINGS_FILE")"
+  rm -f -- "$OMARCHY_SHELL_FILE"
+  if "$ROOT/bin/setup" >/dev/null 2>&1; then fail 'missing shell settings were accepted'; fi
+  assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'missing shell setup committed state'
+}
+
 test_malformed_settings_restore_preexisting_handy_process() {
   make_fixture
   : >"$HOME/.handy-fake-running"
@@ -94,15 +139,17 @@ test_malformed_settings_restore_preexisting_handy_process() {
 
 test_setup_rolls_back_after_dictation_gate() {
   make_fixture
-  local before_bindings before_settings before_autostart
+  local before_bindings before_settings before_autostart before_shell
   before_bindings="$(<"$HYPR_BINDINGS_FILE")"
   before_settings="$(<"$HANDY_SETTINGS_FILE")"
   before_autostart="$(<"$HANDY_AUTOSTART_FILE")"
+  before_shell="$(<"$OMARCHY_SHELL_FILE")"
   unset BLIZL_HANDY_DICTATION_TEST
   if "$ROOT/bin/setup" >/dev/null 2>&1; then fail 'dictation gate unexpectedly passed'; fi
   assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
   assert_eq "$(<"$HANDY_SETTINGS_FILE")" "$before_settings"
   assert_eq "$(<"$HANDY_AUTOSTART_FILE")" "$before_autostart"
+  assert_eq "$(<"$OMARCHY_SHELL_FILE")" "$before_shell"
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'failed setup committed state'
   [[ ! -e "$HOME/.handy-fake-running" ]] || fail 'setup-owned Handy process was left running'
 }
@@ -217,6 +264,138 @@ test_setup_rejects_conflict_without_mutation() {
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'failed setup committed state'
 }
 
+test_setup_rejects_retained_voxtype_key_conflict_without_mutation() {
+  make_fixture
+  local output status before_bindings before_settings
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  chmod +x "$WORK/bin/voxtype"
+  printf '%s\n' \
+    'o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")' \
+    'o.bind("F9", "Stop dictation (push-to-talk)", "voxtype record stop", { release = true })' \
+    >"$VOXTYPE_BINDINGS_FILE"
+  export BLIZL_HANDY_SHORTCUT=F9
+  before_bindings="$(<"$HYPR_BINDINGS_FILE")"
+  before_settings="$(<"$HANDY_SETTINGS_FILE")"
+
+  set +e
+  output="$("$ROOT/bin/setup" 2>&1)"
+  status=$?
+  set -e
+  ((status != 0)) || fail 'retained VoxType key conflict was accepted silently'
+  [[ "$output" == *'VoxType push-to-talk conflict'* ]] ||
+    fail "conflict warning was not clear: $output"
+  assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
+  assert_eq "$(<"$HANDY_SETTINGS_FILE")" "$before_settings"
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] ||
+    fail 'conflicting setup committed install state'
+}
+
+test_setup_detects_voxtype_after_another_action_on_same_key() {
+  make_fixture
+  local output status
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true BLIZL_HANDY_SHORTCUT='ALT+ENTER'
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  chmod +x "$WORK/bin/voxtype"
+  printf '%s\n' \
+    'o.bind("ALT + ENTER", "Keep this action", "other-command")' \
+    'o.bind("ALT + ENTER", "VoxType push-to-talk", "voxtype record start")' \
+    >"$HYPR_BINDINGS_FILE"
+
+  set +e
+  output="$("$ROOT/bin/setup" 2>&1)"
+  status=$?
+  set -e
+
+  ((status != 0)) || fail 'VoxType conflict after another same-key action was accepted'
+  [[ "$output" == *'VoxType push-to-talk conflict on ALT+ENTER'* ]] ||
+    fail "same-key VoxType conflict was not reported: $output"
+}
+
+test_setup_rejects_native_voxtype_alt_enter_conflict_without_mutation() {
+  make_fixture
+  local output status before_config
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  chmod +x "$WORK/bin/voxtype"
+  mkdir -p -- "$(dirname -- "$VOXTYPE_CONFIG_FILE")"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "ENTER"' \
+    'modifiers = ["LEFTALT"]' >"$VOXTYPE_CONFIG_FILE"
+  : >"$VOXTYPE_BINDINGS_FILE"
+  export BLIZL_HANDY_SHORTCUT='ALT + ENTER'
+  before_config="$(<"$VOXTYPE_CONFIG_FILE")"
+
+  set +e
+  output="$("$ROOT/bin/setup" 2>&1)"
+  status=$?
+  set -e
+  ((status != 0)) || fail 'native VoxType Alt+Enter conflict was accepted silently'
+  [[ "$output" == *'VoxType push-to-talk conflict on ALT + ENTER'* ]] ||
+    fail "native conflict warning was not clear: $output"
+  assert_eq "$(<"$VOXTYPE_CONFIG_FILE")" "$before_config"
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] ||
+    fail 'native conflicting setup committed install state'
+}
+
+test_setup_disables_native_voxtype_before_handy_test() {
+  make_fixture
+  local launcher="$WORK/bin/dictation-window" output
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true BLIZL_HANDY_CONFIRM_CONFLICT=yes
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$WORK/bin/pacman"
+  chmod +x "$WORK/bin/voxtype" "$WORK/bin/pacman"
+  mkdir -p -- "$(dirname -- "$VOXTYPE_CONFIG_FILE")"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "ENTER"' \
+    'modifiers = ["LEFTALT"]' >"$VOXTYPE_CONFIG_FILE"
+  : >"$VOXTYPE_BINDINGS_FILE"
+  export BLIZL_HANDY_SHORTCUT='ALT + ENTER'
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'if grep -Fq "enabled = false" "$VOXTYPE_CONFIG_FILE"; then printf "passed\\n" >"$1"; else printf "failed\\n" >"$1"; fi' \
+    >"$launcher"
+  chmod +x "$launcher"
+  unset BLIZL_HANDY_DICTATION_TEST
+  export BLIZL_HANDY_TEST_WINDOW_BIN="$launcher"
+
+  output="$("$ROOT/bin/setup" 2>&1)"
+
+  [[ "$output" == *'Keeping VoxType installed'* ]] ||
+    fail "setup did not explain retained VoxType ownership: $output"
+  [[ "$output" == *'Handy will replace VoxType as Omarchy'\''s dictation engine'* ]] ||
+    fail "setup did not explain the complete VoxType replacement: $output"
+  [[ "$output" == *'before the Handy test window opens'* ]] ||
+    fail "setup did not explain when VoxType controls are disabled: $output"
+  [[ "$output" == *'Now test Handy push-to-talk'* ]] ||
+    fail "setup did not identify the Handy test: $output"
+  assert_file "$BLIZL_HANDY_STATE_DIR/install.json"
+  "$ROOT/bin/uninstall" >/dev/null
+}
+
+test_conflict_approval_does_not_approve_voxtype_removal() {
+  make_fixture
+  local cache="$WORK/package-cache" remover="$WORK/bin/remove-voxtype"
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true BLIZL_HANDY_CONFIRM_CONFLICT=yes
+  mkdir -p -- "$cache" "$(dirname -- "$VOXTYPE_CONFIG_FILE")"
+  printf '%s\n' '[hotkey]' 'enabled = true' 'key = "SPACE"' \
+    'modifiers = ["LEFTALT"]' >"$VOXTYPE_CONFIG_FILE"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    '[[ ${1:-} == -Q && ${2:-} == voxtype-bin ]] && { echo "voxtype-bin 1.2.3"; exit 0; }' \
+    'exit 1' >"$WORK/bin/pacman"
+  printf '%s\n' '#!/usr/bin/env bash' ': >"$HOME/.voxtype-was-removed"' >"$remover"
+  printf 'package\n' >"$cache/voxtype-bin-1.2.3-1-x86_64.pkg.tar.zst"
+  chmod +x "$WORK/bin/voxtype" "$WORK/bin/pacman" "$remover"
+  export BLIZL_HANDY_PACKAGE_CACHE_DIR="$cache" BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$remover"
+
+  "$ROOT/bin/setup" >/dev/null
+
+  [[ ! -e "$HOME/.voxtype-was-removed" ]] ||
+    fail 'approving a shortcut conflict also approved VoxType removal'
+  "$ROOT/bin/uninstall" >/dev/null
+  unset BLIZL_HANDY_CONFIRM_CONFLICT BLIZL_HANDY_PACKAGE_CACHE_DIR BLIZL_HANDY_VOXTYPE_REMOVE_BIN
+}
+
 test_setup_unbinds_stock_voxtype_before_claiming_its_key() {
   make_fixture
   export BLIZL_HANDY_VOXTYPE_PRESENT=true
@@ -228,13 +407,38 @@ test_setup_unbinds_stock_voxtype_before_claiming_its_key() {
     'o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")' \
     'o.bind("F9", "Stop dictation (push-to-talk)", "voxtype record stop", { release = true })' \
     >"$VOXTYPE_BINDINGS_FILE"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$WORK/bin/pacman"
+  chmod +x "$WORK/bin/pacman"
   export BLIZL_HANDY_SHORTCUT=F9
+  export BLIZL_HANDY_CONFIRM_CONFLICT=yes
 
   "$ROOT/bin/setup" >/dev/null
 
   assert_eq "$(grep -Fc -- 'hl.unbind("F9")' "$HYPR_BINDINGS_FILE")" 1
+  grep -Fq -- 'hl.unbind("SUPER + CTRL + X")' "$HYPR_BINDINGS_FILE" ||
+    fail 'stock VoxType toggle ownership was not neutralized'
   grep -Fq -- '-- Previous action: Start dictation (push-to-talk): voxtype record start' \
     "$HYPR_BINDINGS_FILE" || fail 'stock VoxType ownership was not recorded'
+  "$ROOT/bin/uninstall" >/dev/null
+}
+
+test_non_overlapping_voxtype_shortcut_needs_no_conflict_confirmation() {
+  make_fixture
+  local output
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true BLIZL_HANDY_SHORTCUT='ALT + ENTER'
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  chmod +x "$WORK/bin/voxtype"
+  printf '%s\n' \
+    'o.bind("F9", "Start dictation", "voxtype record start")' \
+    'o.bind("SUPER + CTRL + X", "Toggle dictation", "voxtype record toggle")' \
+    >"$VOXTYPE_BINDINGS_FILE"
+
+  output="$("$ROOT/bin/setup" 2>&1)"
+
+  [[ "$output" != *'VoxType push-to-talk conflict'* ]] ||
+    fail "non-overlapping VoxType shortcut produced a conflict warning: $output"
+  grep -Fq -- 'hl.unbind("F9")' "$HYPR_BINDINGS_FILE" ||
+    fail 'non-overlapping VoxType push-to-talk was not neutralized'
   "$ROOT/bin/uninstall" >/dev/null
 }
 
@@ -316,7 +520,7 @@ test_failed_test_reports_plugin_removal_failure_when_checkout_remains() {
 
 test_setup_disables_and_uninstall_restores_native_voxtype_hotkey() {
   make_fixture
-  export BLIZL_HANDY_VOXTYPE_PRESENT=true
+  export BLIZL_HANDY_VOXTYPE_PRESENT=true BLIZL_HANDY_CONFIRM_CONFLICT=yes
   local systemctl_log="$HOME/.systemctl-log" before
   mkdir -p -- "$(dirname -- "$VOXTYPE_CONFIG_FILE")"
   printf '%s\n' \
@@ -330,7 +534,9 @@ test_setup_disables_and_uninstall_restores_native_voxtype_hotkey() {
     '[audio]' \
     'device = "default"' >"$VOXTYPE_CONFIG_FILE"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$WORK/bin/pacman"
   chmod +x "$WORK/bin/voxtype"
+  chmod +x "$WORK/bin/pacman"
   before="$(<"$VOXTYPE_CONFIG_FILE")"
   printf '%s\n' \
     '#!/usr/bin/env bash' \
@@ -427,7 +633,7 @@ test_partial_voxtype_removal_restores_everything() {
   chmod +x "$WORK/bin/systemctl" "$WORK/bin/remove-voxtype" "$WORK/bin/install-voxtype"
   printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} == -Q && ${2:-} == voxtype-bin ]] && { echo "voxtype-bin 1.2.3"; exit 0; }' 'exit 1' >"$WORK/bin/pacman"
   chmod +x "$WORK/bin/pacman"
-  export BLIZL_HANDY_PACKAGE_CACHE_DIR="$cache" BLIZL_HANDY_CONFIRM=yes BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$WORK/bin/remove-voxtype" BLIZL_HANDY_VOXTYPE_INSTALL_BIN="$WORK/bin/install-voxtype"
+  export BLIZL_HANDY_PACKAGE_CACHE_DIR="$cache" BLIZL_HANDY_REMOVE_VOXTYPE=yes BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$WORK/bin/remove-voxtype" BLIZL_HANDY_VOXTYPE_INSTALL_BIN="$WORK/bin/install-voxtype"
   local before_service before_config
   before_service="$(<"$service")" before_config="$(<"$config")"
   if "$ROOT/bin/setup" >/dev/null 2>&1; then fail 'failed VoxType removal unexpectedly succeeded'; fi
@@ -435,12 +641,19 @@ test_partial_voxtype_removal_restores_everything() {
   assert_eq "$(<"$config")" "$before_config"
   [[ -e "$HOME/.voxtype-restored-package" ]] || fail 'VoxType package artifact was not restored'
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'partial setup committed install state'
-  unset BLIZL_HANDY_CONFIRM BLIZL_HANDY_VOXTYPE_REMOVE_BIN BLIZL_HANDY_VOXTYPE_INSTALL_BIN BLIZL_HANDY_PACKAGE_CACHE_DIR
+  unset BLIZL_HANDY_REMOVE_VOXTYPE BLIZL_HANDY_VOXTYPE_REMOVE_BIN BLIZL_HANDY_VOXTYPE_INSTALL_BIN BLIZL_HANDY_PACKAGE_CACHE_DIR
 }
 
 test_setup_uninstall_round_trip
+test_setup_upgrades_a_v1_install_record
 test_setup_rejects_conflict_without_mutation
+test_setup_rejects_retained_voxtype_key_conflict_without_mutation
+test_setup_detects_voxtype_after_another_action_on_same_key
+test_setup_rejects_native_voxtype_alt_enter_conflict_without_mutation
+test_setup_disables_native_voxtype_before_handy_test
+test_conflict_approval_does_not_approve_voxtype_removal
 test_setup_unbinds_stock_voxtype_before_claiming_its_key
+test_non_overlapping_voxtype_shortcut_needs_no_conflict_confirmation
 test_setup_launches_the_test_through_omarchy
 test_failed_test_removes_an_installed_checkout
 test_failed_test_attempts_plugin_removal_after_incomplete_rollback
@@ -452,6 +665,8 @@ test_stale_voxtype_config_does_not_block_setup
 test_setup_rejects_incomplete_managed_block
 test_setup_rejects_malformed_lua
 test_setup_rejects_malformed_settings_without_commit
+test_setup_rejects_malformed_shell_settings_without_mutation
+test_setup_requires_shell_settings_before_mutating
 test_malformed_settings_restore_preexisting_handy_process
 test_setup_rolls_back_after_dictation_gate
 test_setup_uses_a_dedicated_dictation_window

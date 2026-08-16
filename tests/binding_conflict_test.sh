@@ -34,6 +34,17 @@ test_user_push_to_talk_wins_when_both_sources_have_one() {
   assert_eq "$(bindings_detect_voxtype_key "$user" "$stock")" 'ALT + SPACE'
 }
 
+test_detects_all_voxtype_entry_points() {
+  local user="$WORK/user-all.lua" stock="$WORK/stock-all.lua"
+  printf '%s\n' \
+    'o.bind("SUPER + CTRL + X", "Toggle dictation", "voxtype record toggle")' \
+    'o.bind("F9", "Start dictation", "voxtype record start")' >"$user"
+  printf '%s\n' 'o.bind("F9", "Stop dictation", "voxtype record stop", { release = true })' \
+    'o.bind("ALT + SPACE", "Other", "other")' >"$stock"
+  assert_eq "$(bindings_detect_voxtype_keys "$user" "$stock" | paste -sd, -)" \
+    'F9,SUPER + CTRL + X'
+}
+
 test_missing_voxtype_bindings_are_not_an_error() {
   local empty="$WORK/empty.lua"
   : >"$empty"
@@ -72,10 +83,32 @@ test_previous_action_is_readable_and_write_is_idempotent() {
   assert_eq "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$file")" 1
 }
 
+test_managed_block_unbinds_all_voxtype_keys() {
+  local file="$WORK/all-unbinds.lua"
+  printf '%s\n' 'o.bind("F9", "Start dictation", "voxtype record start")' >"$file"
+  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger" $'F9\nSUPER + CTRL + X'
+  assert_eq "$(grep -Fc -- 'hl.unbind("F9")' "$file")" 1
+  assert_eq "$(grep -Fc -- 'hl.unbind("SUPER + CTRL + X")' "$file")" 1
+  assert_eq "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$file")" 1
+}
+
+test_managed_block_rejects_malformed_detected_key() {
+  local file="$WORK/malformed-key.lua"
+  printf '%s\n' 'o.bind("F9", "Start", "voxtype record start")' >"$file"
+  if bindings_write_managed "$file" F9 '' "$ROOT/bin/handy-trigger" $'F9\nBAD"KEY'; then
+    fail 'malformed detected key was accepted'
+  fi
+  ! grep -Fq -- 'BEGIN blizl.handy managed bindings' "$file" ||
+    fail 'malformed key changed the bindings file'
+}
+
 test_detects_push_to_talk_over_toggle_across_user_and_stock_files
 test_user_push_to_talk_wins_when_both_sources_have_one
+test_detects_all_voxtype_entry_points
 test_missing_voxtype_bindings_are_not_an_error
 test_managed_block_unbinds_even_without_previous_action
 test_detects_non_string_action_conflicts
 test_previous_action_is_readable_and_write_is_idempotent
+test_managed_block_unbinds_all_voxtype_keys
+test_managed_block_rejects_malformed_detected_key
 printf 'binding conflict tests: ok\n'

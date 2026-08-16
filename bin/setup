@@ -14,11 +14,15 @@ source "$PLUGIN_ROOT/lib/transaction.sh"
 # Resolved from the installed plugin directory.
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/voxtype-settings.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/shell-settings.sh"
 
 STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
 BINDINGS_FILE="${HYPR_BINDINGS_FILE:-$HOME/.config/hypr/bindings.lua}"
 AUTOSTART_FILE="${HANDY_AUTOSTART_FILE:-$HOME/.config/autostart/Handy.desktop}"
 SETTINGS_FILE="$(handy_settings_file)"
+SHELL_FILE="$(shell_settings_file)"
 INSTALL_FILE="$STATE_ROOT/install.json"
 VOXTYPE_BINDINGS_FILE="${VOXTYPE_BINDINGS_FILE:-${OMARCHY_PATH:-/usr/share/omarchy}/default/hypr/bindings/voxtype.lua}"
 VOXTYPE_CONFIG="${VOXTYPE_CONFIG_FILE:-$HOME/.config/voxtype/config.toml}"
@@ -165,6 +169,9 @@ preflight() {
   transaction_safe_target "$BINDINGS_FILE" || fail "bindings path resolves outside the supported user configuration roots"
   transaction_safe_target "$SETTINGS_FILE" || fail "Handy settings path resolves outside the supported user configuration roots"
   transaction_safe_target "$AUTOSTART_FILE" || fail "autostart path resolves outside the supported user configuration roots"
+  [[ -f "$SHELL_FILE" ]] || fail "Omarchy shell settings file not found: $SHELL_FILE"
+  transaction_safe_target "$SHELL_FILE" || fail "Omarchy shell path resolves outside the supported user configuration roots"
+  jq -e . "$SHELL_FILE" >/dev/null || fail "Omarchy shell settings are malformed: $SHELL_FILE"
   transaction_safe_target "$VOXTYPE_CONFIG" || fail "VoxType config path resolves outside the supported user configuration roots"
   transaction_safe_target "$INSTALL_FILE" || fail "state path resolves outside the supported user configuration roots"
   if [[ "${BLIZL_HANDY_FORCE_INSTALL:-false}" == true ]] || ! command -v handy >/dev/null; then
@@ -235,8 +242,69 @@ select_shortcut() {
   esac
 }
 
+voxtype_binding_owns_key() {
+  local bindings_file="$1" key="$2" detected_key
+  while IFS= read -r detected_key; do
+    voxtype_shortcuts_equal "$detected_key" "$key" && return 0
+  done < <(bindings_detect_voxtype_keys "$bindings_file")
+  return 1
+}
+
+voxtype_conflict_present() {
+  local native_shortcut=''
+
+  voxtype_is_available || return 1
+  if voxtype_binding_owns_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT" ||
+    voxtype_binding_owns_key "$VOXTYPE_BINDINGS_FILE" "$SELECTED_SHORTCUT"; then
+    return 0
+  fi
+  if [[ -f "$VOXTYPE_CONFIG" ]] && voxtype_hotkey_enabled "$VOXTYPE_CONFIG"; then
+    if ! native_shortcut="$(voxtype_hotkey_shortcut "$VOXTYPE_CONFIG" 2>/dev/null)"; then
+      fail "VoxType's native hotkey configuration is malformed"
+    fi
+    if [[ -n "$native_shortcut" ]] && voxtype_shortcuts_equal "$native_shortcut" "$SELECTED_SHORTCUT"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+explain_voxtype_replacement() {
+  voxtype_is_available || return 0
+
+  say "Handy will replace VoxType as Omarchy's dictation engine while this plugin is installed."
+  say "Setup will disable any VoxType hotkeys, bindings, and the center Dictation indicator before the Handy test window opens."
+  say "VoxType stays installed unless you remove it later; uninstall restores its previous controls."
+}
+
+confirm_voxtype_conflict() {
+  voxtype_conflict_present || return 0
+
+  say "Warning: VoxType push-to-talk conflict on $SELECTED_SHORTCUT."
+  say "Keeping VoxType and Handy on the same push-to-talk key can leave transcription running when the key is released."
+  if [[ -n "${BLIZL_HANDY_CONFIRM_CONFLICT:-}" ]]; then
+    [[ "$BLIZL_HANDY_CONFIRM_CONFLICT" == yes ]] ||
+      fail "VoxType push-to-talk conflict was not confirmed"
+  elif [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true ]]; then
+    fail "VoxType push-to-talk conflict on $SELECTED_SHORTCUT; choose another shortcut or explicitly confirm Handy's takeover"
+  else
+    confirm "Let Handy take over $SELECTED_SHORTCUT and disable VoxType's matching hotkey?" no ||
+      fail "VoxType push-to-talk conflict was not confirmed"
+  fi
+  say "VoxType will be kept installed. Handy will own $SELECTED_SHORTCUT; all detected VoxType push-to-talk/toggle bindings are disabled now and restored on uninstall."
+}
+
+confirm_voxtype_removal() {
+  if [[ -n "${BLIZL_HANDY_REMOVE_VOXTYPE:-}" ]]; then
+    [[ "$BLIZL_HANDY_REMOVE_VOXTYPE" == yes ]]
+    return
+  fi
+  [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true ]] || return 1
+  confirm "Handy passed. Remove VoxType?" no
+}
+
 configure_binding() {
-  local existing trigger_path
+  local existing trigger_path voxtype_keys=''
   existing="$(bindings_action_for_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT")"
   if [[ -z "$existing" ]] && voxtype_is_available; then
     existing="$(bindings_action_for_key "$VOXTYPE_BINDINGS_FILE" "$SELECTED_SHORTCUT")"
@@ -246,7 +314,10 @@ configure_binding() {
     confirm "Replace that action?" no || fail "shortcut replacement declined"
   fi
   trigger_path="$PLUGIN_ROOT/bin/handy-trigger"
-  bindings_write_managed "$BINDINGS_FILE" "$SELECTED_SHORTCUT" "$existing" "$trigger_path"
+  if voxtype_is_available; then
+    voxtype_keys="$(bindings_detect_voxtype_keys "$BINDINGS_FILE" "$VOXTYPE_BINDINGS_FILE")"
+  fi
+  bindings_write_managed "$BINDINGS_FILE" "$SELECTED_SHORTCUT" "$existing" "$trigger_path" "$voxtype_keys"
 }
 
 configure_handy_binding() {
@@ -271,6 +342,7 @@ configure_voxtype_hotkey() {
   case "$disable_status" in
     "$VOXTYPE_SETTINGS_CHANGED")
       VOXTYPE_HOTKEY_DISABLED=true
+      say "Keeping VoxType installed, but disabling its native push-to-talk for Handy. Uninstall restores VoxType's original hotkey."
       if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active voxtype.service >/dev/null 2>&1; then
         VOXTYPE_WAS_ACTIVE=true
         systemctl --user restart voxtype.service >/dev/null
@@ -305,6 +377,12 @@ StartupNotify=false
 Terminal=false
 DESKTOP
   fi
+}
+
+configure_shell_widget() {
+  shell_settings_install_handy_widget "$SHELL_FILE" ||
+    fail "could not replace the built-in Dictation indicator in Omarchy shell settings"
+  say "Replaced the built-in Dictation indicator with Handy in the center section."
 }
 
 validate_reload() {
@@ -401,13 +479,14 @@ dictation_test() {
     fail "a graphical dictation test is required before setup can commit"
   fi
   DICTATION_TEST_STARTED=true
+  say "Now test Handy push-to-talk by holding $SELECTED_SHORTCUT and speaking one sentence."
   run_dictation_test_window || fail "dictation test did not produce text"
 }
 
 maybe_remove_voxtype() {
   local version artifact recovery path relative enabled active
   pacman -Q voxtype-bin >/dev/null 2>&1 || return 0
-  confirm "Handy passed. Remove VoxType?" no || return 0
+  confirm_voxtype_removal || return 0
 
   version="$(pacman -Q voxtype-bin | awk '{print $2}')"
   artifact="$(find "${BLIZL_HANDY_PACKAGE_CACHE_DIR:-/var/cache/pacman/pkg}" -maxdepth 1 -type f -name "voxtype-bin-${version}-*.pkg.tar.*" -print -quit 2>/dev/null)"
@@ -481,12 +560,24 @@ voxtype_restore() {
 }
 
 main() {
+  local installed_version
+
   preflight
   mkdir -p -- "$STATE_ROOT"
   if [[ -f "$INSTALL_FILE" ]]; then
     jq -e '.transaction and .shortcut' "$INSTALL_FILE" >/dev/null || fail "existing setup record is malformed"
-    say "Handy dictation is already configured; leaving its managed binding unchanged."
-    return 0
+    installed_version="$(jq -r '.version // 1' "$INSTALL_FILE")"
+    case "$installed_version" in
+      2)
+        say "Handy dictation is already configured; leaving its managed integration unchanged."
+        return 0
+        ;;
+      1)
+        say "Upgrading the existing Handy integration to the conflict-safe setup."
+        "$PLUGIN_ROOT/bin/uninstall"
+        ;;
+      *) fail "unsupported existing setup version: $installed_version" ;;
+    esac
   fi
 
   transaction_begin "$STATE_ROOT"
@@ -494,6 +585,7 @@ main() {
   transaction_backup "$BINDINGS_FILE"
   transaction_backup "$SETTINGS_FILE"
   transaction_backup "$AUTOSTART_FILE"
+  transaction_backup "$SHELL_FILE"
   transaction_backup "$VOXTYPE_CONFIG"
   transaction_backup "$INSTALL_FILE"
 
@@ -501,17 +593,20 @@ main() {
   launch_onboarding
   [[ -f "$SETTINGS_FILE" ]] || fail "Handy settings do not exist; finish onboarding first"
   select_shortcut
+  explain_voxtype_replacement
+  confirm_voxtype_conflict
   configure_voxtype_hotkey
   configure_handy_binding
   configure_binding
   configure_autostart
+  configure_shell_widget
   validate_reload
   start_handy_hidden
   [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$HANDY_RESERVED_BINDING" ]] || fail "Handy did not register the reserved shortcut"
   dictation_test
 
   jq -n \
-    --arg version "1" \
+    --arg version "2" \
     --arg transaction "$TRANSACTION_DIR" \
     --arg shortcut "$SELECTED_SHORTCUT" \
     --arg reserved "$HANDY_RESERVED_BINDING" \

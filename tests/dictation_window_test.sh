@@ -60,6 +60,18 @@ test_eof_is_a_failed_test() {
   assert_result failed
 }
 
+test_instructions_explain_handy_and_conflict_safety() {
+  new_fixture
+  local output
+  set +e
+  output="$(printf 'test words\n' | "$ROOT/bin/handy-test-window" "$RESULT_FILE" 'ALT + SPACE' 2>&1)"
+  RUN_STATUS=$?
+  set -e
+  [[ "$RUN_STATUS" == 0 ]] || return 1
+  [[ "$output" == *'tests Handy with the selected shortcut: ALT + SPACE'* ]] || return 1
+  [[ "$output" == *'Setup disabled any conflicting VoxType shortcut before opening this window.'* ]]
+}
+
 test_pid_file_identifies_live_helper_and_is_removed() {
   new_fixture
   local input_pipe="$FIXTURE/input" helper_pid recorded_pid writer_pid
@@ -127,6 +139,7 @@ for test_name in \
   test_non_empty_dictation_passes \
   test_whitespace_only_dictation_fails \
   test_eof_is_a_failed_test \
+  test_instructions_explain_handy_and_conflict_safety \
   test_pid_file_identifies_live_helper_and_is_removed \
   test_pid_file_is_removed_when_helper_is_terminated \
   test_invalid_arguments_are_rejected; do

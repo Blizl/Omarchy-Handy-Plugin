@@ -58,6 +58,8 @@ main() {
   rm -f -- "$result_file"
   write_pid_file
   printf '\nHandy dictation test\n\n'
+  printf 'This window tests Handy with the selected shortcut: %s.\n' "$shortcut_label"
+  printf 'Setup disabled any conflicting VoxType shortcut before opening this window.\n'
   printf 'Keep this test window focused.\n'
   printf 'Hold %s, speak one sentence, then release it.\n' "$shortcut_label"
   printf 'The dictated text should appear below. Press Enter when complete.\n\n'

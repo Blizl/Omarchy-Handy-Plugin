@@ -63,5 +63,5 @@ if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && command -v hyprctl >/dev/null;
   }
 fi
 
-echo "Restored bindings, Handy shortcut settings, and autostart state."
+echo "Restored bindings, shell layout, Handy shortcut settings, and autostart state."
 echo "Handy, its models, and VoxType were not removed."

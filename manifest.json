@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "blizl.handy",
   "name": "Handy Dictation",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Blizl Labs LLC",
   "license": "MIT",
   "description": "Handy voice dictation and microphone status for Omarchy Quattro",
@@ -15,6 +15,6 @@
     "description": "Microphone availability and live capture status with one-click access to Handy.",
     "category": "Audio",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "center"
   }
 }
