@@ -79,7 +79,7 @@ EOF
   rm -f -- "$CANCELLED"
   rm -f -- "$HANDY_RUNNING"
   unset HANDY_START_STATUS HANDY_TOGGLE_STATUS
-  unset WPCTL_STATUS
+  unset WPCTL_STATUS HANDY_CHORD_WATCHER_BIN
   chmod +x "$ROOT/bin/handy-trigger"
 }
 
@@ -283,6 +283,147 @@ test_stop_failure_cancels_and_notifies() {
   grep -q 'Handy could not finish dictation' "$NOTIFY_LOG"
 }
 
+test_press_spawns_watcher_and_records_pid() {
+  microphone_fixture
+  cat >"$FIXTURE/bin/mock-watcher" <<'EOF'
+#!/usr/bin/env bash
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+EOF
+  chmod +x "$FIXTURE/bin/mock-watcher"
+  export HANDY_CHORD_WATCHER_BIN="$FIXTURE/bin/mock-watcher"
+
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  local pid_file="$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
+  [[ -f "$pid_file" ]] || return 1
+  local wpid
+  wpid="$(<"$pid_file")"
+  [[ "$wpid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$wpid" >/dev/null 2>&1 || return 1
+
+  kill "$wpid" >/dev/null 2>&1 || true
+}
+
+test_release_terminates_watcher_and_cleans_runtime_files() {
+  microphone_fixture
+  cat >"$FIXTURE/bin/mock-watcher" <<'EOF'
+#!/usr/bin/env bash
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+EOF
+  chmod +x "$FIXTURE/bin/mock-watcher"
+  export HANDY_CHORD_WATCHER_BIN="$FIXTURE/bin/mock-watcher"
+
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  local pid_file="$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
+  [[ -f "$pid_file" ]] || return 1
+  local wpid
+  wpid="$(<"$pid_file")"
+  kill -0 "$wpid" >/dev/null 2>&1 || return 1
+
+  run_trigger release
+  assert_status 0 "$RUN_STATUS" || return 1
+  [[ ! -e "$pid_file" ]] || return 1
+  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+  for _ in {1..20}; do
+    kill -0 "$wpid" >/dev/null 2>&1 || break
+    sleep 0.05
+  done
+  ! kill -0 "$wpid" >/dev/null 2>&1 || return 1
+  [[ $(<"$TOGGLE_COUNT") == 2 ]]
+}
+
+test_stop_terminates_watcher_and_cleans_runtime_files() {
+  microphone_fixture
+  cat >"$FIXTURE/bin/mock-watcher" <<'EOF'
+#!/usr/bin/env bash
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+EOF
+  chmod +x "$FIXTURE/bin/mock-watcher"
+  export HANDY_CHORD_WATCHER_BIN="$FIXTURE/bin/mock-watcher"
+
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  local pid_file="$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
+  [[ -f "$pid_file" ]] || return 1
+  local wpid
+  wpid="$(<"$pid_file")"
+  kill -0 "$wpid" >/dev/null 2>&1 || return 1
+
+  run_trigger stop
+  assert_status 0 "$RUN_STATUS" || return 1
+  [[ ! -e "$pid_file" ]] || return 1
+  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+  for _ in {1..20}; do
+    kill -0 "$wpid" >/dev/null 2>&1 || break
+    sleep 0.05
+  done
+  ! kill -0 "$wpid" >/dev/null 2>&1 || return 1
+  [[ $(<"$TOGGLE_COUNT") == 2 ]]
+}
+
+test_reconcile_stale_marker_terminates_orphan_watcher() {
+  microphone_fixture
+  sleep 60 &
+  local orphan_pid=$!
+  printf '%s\n' "$orphan_pid" >"$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
+  : >"$BLIZL_HANDY_RUNTIME_DIR/recording-armed"
+  rm -f "$HANDY_RUNNING"
+
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  for _ in {1..20}; do
+    kill -0 "$orphan_pid" >/dev/null 2>&1 || break
+    sleep 0.05
+  done
+  ! kill -0 "$orphan_pid" >/dev/null 2>&1 || {
+    kill "$orphan_pid" >/dev/null 2>&1 || true
+    return 1
+  }
+}
+
+test_reconcile_orphan_watcher_without_armed_marker() {
+  microphone_fixture
+  sleep 60 &
+  local orphan_pid=$!
+  printf '%s\n' "$orphan_pid" >"$BLIZL_HANDY_RUNTIME_DIR/watcher.pid"
+  rm -f "$BLIZL_HANDY_RUNTIME_DIR/recording-armed"
+
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+  ! kill -0 "$orphan_pid" >/dev/null 2>&1 || {
+    kill "$orphan_pid" >/dev/null 2>&1 || true
+    return 1
+  }
+}
+
+test_concurrent_watcher_and_release_binding_is_idempotent() {
+  microphone_fixture
+  run_trigger press
+  assert_status 0 "$RUN_STATUS" || return 1
+
+  "$ROOT/bin/handy-trigger" release &
+  local pid1=$!
+  "$ROOT/bin/handy-trigger" release &
+  local pid2=$!
+  "$ROOT/bin/handy-trigger" release &
+  local pid3=$!
+
+  wait "$pid1"
+  local s1=$?
+  wait "$pid2"
+  local s2=$?
+  wait "$pid3"
+  local s3=$?
+
+  [[ "$s1" == 0 && "$s2" == 0 && "$s3" == 0 ]] || return 1
+  [[ $(<"$TOGGLE_COUNT") == 2 ]] || return 1
+  [[ ! -e "$BLIZL_HANDY_RUNTIME_DIR/recording-armed" ]] || return 1
+}
+
 for test_name in \
   test_real_microphone_is_available \
   test_muted_microphone_is_still_available_to_trigger \
@@ -301,7 +442,13 @@ for test_name in \
   test_release_failure_cancels_and_notifies \
   test_stop_finishes_without_canceling \
   test_stop_without_marker_still_toggles \
-  test_stop_failure_cancels_and_notifies; do
+  test_stop_failure_cancels_and_notifies \
+  test_press_spawns_watcher_and_records_pid \
+  test_release_terminates_watcher_and_cleans_runtime_files \
+  test_stop_terminates_watcher_and_cleans_runtime_files \
+  test_reconcile_stale_marker_terminates_orphan_watcher \
+  test_reconcile_orphan_watcher_without_armed_marker \
+  test_concurrent_watcher_and_release_binding_is_idempotent; do
   run_test "$test_name"
 done
 

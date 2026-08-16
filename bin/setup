@@ -90,6 +90,16 @@ cleanup() {
     rm -rf -- "$TEST_WINDOW_DIR"
     TEST_WINDOW_DIR=''
   fi
+  local runtime_root="${BLIZL_HANDY_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/blizl-handy}"
+  if [[ -f "$runtime_root/watcher.pid" ]]; then
+    local watcher_pid
+    watcher_pid="$(<"$runtime_root/watcher.pid")"
+    if [[ "$watcher_pid" =~ ^[0-9]+$ && "$watcher_pid" != "$$" ]]; then
+      kill "$watcher_pid" >/dev/null 2>&1 || true
+    fi
+    rm -f -- "$runtime_root/watcher.pid"
+  fi
+  rm -f -- "$runtime_root/recording-armed"
   if ((status != 0)) && [[ "$CREATED_TRANSACTION" == true && "$COMMITTED" != true ]]; then
     say "Setup failed; restoring plugin-managed files."
     transaction_restore "$TRANSACTION_DIR" || {

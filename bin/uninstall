@@ -46,6 +46,16 @@ if pgrep -x handy >/dev/null 2>&1; then
   pkill -x handy
 fi
 
+runtime_root="${BLIZL_HANDY_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/blizl-handy}"
+if [[ -f "$runtime_root/watcher.pid" ]]; then
+  watcher_pid="$(<"$runtime_root/watcher.pid")"
+  if [[ "$watcher_pid" =~ ^[0-9]+$ && "$watcher_pid" != "$$" ]]; then
+    kill "$watcher_pid" >/dev/null 2>&1 || true
+  fi
+  rm -f -- "$runtime_root/watcher.pid"
+fi
+rm -f -- "$runtime_root/recording-armed"
+
 transaction_restore "$transaction_dir"
 if [[ "$VOXTYPE_HOTKEY_DISABLED" == true ]] && command -v systemctl >/dev/null 2>&1 &&
   systemctl --user is-active voxtype.service >/dev/null 2>&1; then

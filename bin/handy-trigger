@@ -19,9 +19,42 @@ handy_is_running() {
   "$pgrep_bin" -x handy >/dev/null 2>&1
 }
 
+watcher_pid_file="$runtime_root/watcher.pid"
+
+stop_chord_watcher() {
+  if [[ -f "$watcher_pid_file" ]]; then
+    local wpid
+    wpid="$(<"$watcher_pid_file")"
+    if [[ "$wpid" =~ ^[0-9]+$ && "$wpid" != "$$" ]]; then
+      kill "$wpid" >/dev/null 2>&1 || true
+    fi
+    rm -f -- "$watcher_pid_file"
+  fi
+}
+
+start_chord_watcher() {
+  stop_chord_watcher
+  local watcher_bin="${HANDY_CHORD_WATCHER_BIN:-$PLUGIN_ROOT/bin/handy-chord-watcher}"
+  [[ -x "$watcher_bin" ]] || return 0
+  local shortcut
+  shortcut="${BLIZL_HANDY_SHORTCUT:-}"
+  if [[ -z "$shortcut" && -f "$HOME/.local/state/blizl.handy/install.json" ]]; then
+    shortcut="$(jq -r '.shortcut // empty' "$HOME/.local/state/blizl.handy/install.json" 2>/dev/null || true)"
+  fi
+  shortcut="${shortcut:-ALT + SPACE}"
+
+  "$watcher_bin" "$shortcut" "$0" 9>&- >/dev/null 2>&1 &
+  local wpid=$!
+  printf '%s\n' "$wpid" >"$watcher_pid_file"
+}
+
 reconcile_stale_marker() {
-  [[ -f "$armed_file" ]] || return 0
-  handy_is_running || rm -f -- "$armed_file"
+  if ! handy_is_running; then
+    rm -f -- "$armed_file"
+    stop_chord_watcher
+  elif [[ ! -f "$armed_file" && -f "$watcher_pid_file" ]]; then
+    stop_chord_watcher
+  fi
 }
 
 ensure_handy_is_running() {
@@ -50,9 +83,11 @@ press() {
   fi
 
   : >"$armed_file"
+  start_chord_watcher
 }
 
 release() {
+  stop_chord_watcher
   [[ -f "$armed_file" ]] || return 0
   rm -f -- "$armed_file"
 
@@ -64,6 +99,7 @@ release() {
 }
 
 stop() {
+  stop_chord_watcher
   rm -f -- "$armed_file"
 
   if ! "$handy_bin" --toggle-transcription; then
@@ -73,8 +109,10 @@ stop() {
   fi
 }
 
+flock_bin="${FLOCK_BIN:-flock}"
+
 exec 9>"$lock_file"
-flock -x 9
+"$flock_bin" -x 9
 
 case "${1:-}" in
   press) press ;;

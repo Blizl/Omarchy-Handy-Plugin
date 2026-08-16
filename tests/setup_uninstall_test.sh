@@ -644,6 +644,50 @@ test_partial_voxtype_removal_restores_everything() {
   unset BLIZL_HANDY_REMOVE_VOXTYPE BLIZL_HANDY_VOXTYPE_REMOVE_BIN BLIZL_HANDY_VOXTYPE_INSTALL_BIN BLIZL_HANDY_PACKAGE_CACHE_DIR
 }
 
+test_uninstall_cleans_up_running_watcher_and_runtime_files() {
+  make_fixture
+  "$ROOT/bin/setup" >/dev/null
+  local runtime_dir="$HOME/.local/state/blizl.handy/runtime"
+  mkdir -p -- "$runtime_dir"
+  export BLIZL_HANDY_RUNTIME_DIR="$runtime_dir"
+  sleep 60 &
+  local watcher_pid=$!
+  printf '%s\n' "$watcher_pid" >"$runtime_dir/watcher.pid"
+  : >"$runtime_dir/recording-armed"
+
+  "$ROOT/bin/uninstall" >/dev/null
+
+  ! kill -0 "$watcher_pid" >/dev/null 2>&1 || {
+    kill "$watcher_pid" >/dev/null 2>&1 || true
+    fail 'uninstall did not terminate running chord watcher'
+  }
+  [[ ! -e "$runtime_dir/watcher.pid" ]] || fail 'uninstall left watcher.pid'
+  [[ ! -e "$runtime_dir/recording-armed" ]] || fail 'uninstall left recording-armed'
+  unset BLIZL_HANDY_RUNTIME_DIR
+}
+
+test_setup_failure_cleanup_terminates_orphan_watcher() {
+  make_fixture
+  local runtime_dir="$HOME/.local/state/blizl.handy/runtime"
+  mkdir -p -- "$runtime_dir"
+  export BLIZL_HANDY_RUNTIME_DIR="$runtime_dir"
+  sleep 60 &
+  local watcher_pid=$!
+  printf '%s\n' "$watcher_pid" >"$runtime_dir/watcher.pid"
+  : >"$runtime_dir/recording-armed"
+
+  printf '{broken\n' >"$HANDY_SETTINGS_FILE"
+  if "$ROOT/bin/setup" >/dev/null 2>&1; then fail 'malformed Handy settings were accepted'; fi
+
+  ! kill -0 "$watcher_pid" >/dev/null 2>&1 || {
+    kill "$watcher_pid" >/dev/null 2>&1 || true
+    fail 'setup failure cleanup did not terminate orphan chord watcher'
+  }
+  [[ ! -e "$runtime_dir/watcher.pid" ]] || fail 'setup failure cleanup left watcher.pid'
+  [[ ! -e "$runtime_dir/recording-armed" ]] || fail 'setup failure cleanup left recording-armed'
+  unset BLIZL_HANDY_RUNTIME_DIR
+}
+
 test_setup_uninstall_round_trip
 test_setup_upgrades_a_v1_install_record
 test_setup_rejects_conflict_without_mutation
@@ -678,4 +722,6 @@ test_fresh_install_uses_aur_aware_installer
 test_voxtype_removal_defaults_to_no
 test_voxtype_removal_uses_explicit_package_command
 test_partial_voxtype_removal_restores_everything
+test_uninstall_cleans_up_running_watcher_and_runtime_files
+test_setup_failure_cleanup_terminates_orphan_watcher
 printf 'setup/uninstall tests: ok\n'

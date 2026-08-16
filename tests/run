@@ -5,7 +5,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 for test in "$ROOT"/tests/*_test.sh; do
   printf '\n==> %s\n' "${test#$ROOT/}"
-  "$test"
+  bash "$test"
 done
 
 printf '\nAll test scripts passed.\n'

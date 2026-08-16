@@ -107,58 +107,12 @@ bindings_action_for_key() {
   ' "$bindings_file"
 }
 
-bindings_modifier_release_keys() {
-  local shortcut="$1" part key
-  local -a parts=() release_keys=()
-  local has_alt=false has_super=false has_ctrl=false has_shift=false
-
-  IFS='+' read -r -a parts <<<"$shortcut"
-  ((${#parts[@]} > 1)) || return 0
-  unset 'parts[${#parts[@]}-1]'
-
-  for part in "${parts[@]}"; do
-    part="${part//[[:space:]]/}"
-    part="${part^^}"
-    case "$part" in
-      ALT | LEFTALT | RIGHTALT | MOD1 | ALT_L | ALT_R)
-        if [[ "$has_alt" == false ]]; then
-          has_alt=true
-          release_keys+=("Alt_L" "Alt_R")
-        fi
-        ;;
-      SUPER | LEFTSUPER | RIGHTSUPER | META | LEFTMETA | RIGHTMETA | MOD4 | WIN | LOGO | SUPER_L | SUPER_R)
-        if [[ "$has_super" == false ]]; then
-          has_super=true
-          release_keys+=("Super_L" "Super_R")
-        fi
-        ;;
-      CTRL | CONTROL | LEFTCTRL | RIGHTCTRL | MOD3 | CTRL_L | CTRL_R | CONTROL_L | CONTROL_R)
-        if [[ "$has_ctrl" == false ]]; then
-          has_ctrl=true
-          release_keys+=("Control_L" "Control_R")
-        fi
-        ;;
-      SHIFT | LEFTSHIFT | RIGHTSHIFT | SHIFT_L | SHIFT_R)
-        if [[ "$has_shift" == false ]]; then
-          has_shift=true
-          release_keys+=("Shift_L" "Shift_R")
-        fi
-        ;;
-    esac
-  done
-
-  for key in "${release_keys[@]}"; do
-    printf '%s\n' "$key"
-  done
-}
-
 bindings_write_managed() {
   local bindings_file="$1"
   local key="$2"
   local previous_action="${3:-}"
   local trigger_path="$4"
-  local voxtype_keys="${5:-$key}" managed_key mod_release_key selected_unbound=false temporary clean
-  local -a modifier_releases=()
+  local voxtype_keys="${5:-$key}" managed_key selected_unbound=false temporary clean
 
   [[ "$key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
     echo "Shortcut contains unsupported characters: $key" >&2
@@ -171,11 +125,6 @@ bindings_write_managed() {
       return 1
     }
   done <<<"$voxtype_keys"
-
-  while IFS= read -r mod_release_key; do
-    [[ -n "$mod_release_key" ]] || continue
-    modifier_releases+=("$mod_release_key")
-  done < <(bindings_modifier_release_keys "$key")
 
   temporary="$(mktemp "${bindings_file}.tmp.XXXXXX")"
   clean="$(mktemp "${bindings_file}.clean.XXXXXX")"
@@ -197,15 +146,6 @@ bindings_write_managed() {
     printf '\n'
     printf 'o.bind(\n  "%s",\n  "Start Handy dictation",\n  "%s press"\n)\n\n' "$key" "$trigger_path"
     printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$key" "$trigger_path"
-    if ((${#modifier_releases[@]} > 0)); then
-      printf '\n'
-      printf '%s\n' "-- Releasing either the chord or individual modifier key(s) stops dictation,"
-      printf '%s\n' "-- ensuring push-to-talk ends even if the modifier is released before the base key."
-      for mod_release_key in "${modifier_releases[@]}"; do
-        [[ -n "$mod_release_key" ]] || continue
-        printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$mod_release_key" "$trigger_path"
-      done
-    fi
     printf '%s\n' "$HANDY_BINDINGS_END"
   } >>"$temporary"
 

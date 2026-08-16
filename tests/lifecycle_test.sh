@@ -33,8 +33,7 @@ LUA
   bindings_write_managed "$file" "ALT + SPACE" "" "$ROOT/bin/handy-trigger"
   assert_eq "$(grep -F --count -- "$HANDY_BINDINGS_BEGIN" "$file")" 1
   assert_eq "$(grep -Fc 'Start Handy dictation' "$file")" 1
-  assert_eq "$(grep -Fc 'Alt_L' "$file")" 1
-  assert_eq "$(grep -Fc 'Alt_R' "$file")" 1
+  assert_eq "$(grep -Fc 'Stop Handy dictation' "$file")" 1
   bindings_validate "$file" || fail "bindings syntax validation failed"
 }
 

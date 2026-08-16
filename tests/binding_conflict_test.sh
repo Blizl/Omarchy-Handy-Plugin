@@ -102,48 +102,16 @@ test_managed_block_rejects_malformed_detected_key() {
     fail 'malformed key changed the bindings file'
 }
 
-test_modifier_release_keys_extraction() {
-  assert_eq "$(bindings_modifier_release_keys 'ALT + SPACE' | paste -sd, -)" 'Alt_L,Alt_R'
-  assert_eq "$(bindings_modifier_release_keys 'SUPER + SPACE' | paste -sd, -)" 'Super_L,Super_R'
-  assert_eq "$(bindings_modifier_release_keys 'CTRL + SPACE' | paste -sd, -)" 'Control_L,Control_R'
-  assert_eq "$(bindings_modifier_release_keys 'SHIFT + SPACE' | paste -sd, -)" 'Shift_L,Shift_R'
-  assert_eq "$(bindings_modifier_release_keys 'SUPER + CTRL + X' | paste -sd, -)" 'Super_L,Super_R,Control_L,Control_R'
-  assert_eq "$(bindings_modifier_release_keys 'CTRL + ALT + SHIFT + SUPER + SPACE' | paste -sd, -)" 'Control_L,Control_R,Alt_L,Alt_R,Shift_L,Shift_R,Super_L,Super_R'
-  assert_eq "$(bindings_modifier_release_keys 'F9')" ''
-  assert_eq "$(bindings_modifier_release_keys 'SPACE')" ''
-  assert_eq "$(bindings_modifier_release_keys 'alt + space' | paste -sd, -)" 'Alt_L,Alt_R'
-  assert_eq "$(bindings_modifier_release_keys 'Control + space' | paste -sd, -)" 'Control_L,Control_R'
-  assert_eq "$(bindings_modifier_release_keys 'LEFTCTRL + space' | paste -sd, -)" 'Control_L,Control_R'
-  assert_eq "$(bindings_modifier_release_keys 'RIGHTALT + space' | paste -sd, -)" 'Alt_L,Alt_R'
-  assert_eq "$(bindings_modifier_release_keys 'LEFTSHIFT + space' | paste -sd, -)" 'Shift_L,Shift_R'
-  assert_eq "$(bindings_modifier_release_keys 'META + space' | paste -sd, -)" 'Super_L,Super_R'
-}
-
-test_managed_block_emits_modifier_release_bindings() {
-  local file="$WORK/modifier-releases.lua"
+test_managed_block_emits_clean_bindings() {
+  local file="$WORK/clean-bindings.lua"
   printf '%s\n' 'o.bind("F9", "Open terminal", "kitty")' >"$file"
   bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
   assert_contains "$file" 'o.bind('
   assert_contains "$file" '"ALT + SPACE"'
-  assert_contains "$file" '"Alt_L"'
-  assert_contains "$file" '"Alt_R"'
   assert_contains "$file" '{ release = true }'
-  assert_eq "$(grep -Fc -- '"Alt_L"' "$file")" 1
-  assert_eq "$(grep -Fc -- '"Alt_R"' "$file")" 1
-  assert_eq "$(grep -Fc -- 'release = true' "$file")" 3
-  bindings_validate "$file" || fail 'bindings validation failed on generated file'
-}
-
-test_managed_block_single_key_has_no_modifier_releases() {
-  local file="$WORK/single-key.lua"
-  printf '%s\n' 'o.bind("SUPER + B", "Browser", "browser")' >"$file"
-  bindings_write_managed "$file" 'F9' '' "$ROOT/bin/handy-trigger"
-  assert_contains "$file" '"F9"'
-  assert_eq "$(grep -Fc -- '"F9"' "$file")" 3
+  assert_eq "$(grep -Fc -- '"ALT + SPACE"' "$file")" 3
   assert_eq "$(grep -Fc -- 'release = true' "$file")" 1
-  ! grep -Fq -- '"Alt_L"' "$file" || fail 'unexpected Alt_L in single-key managed block'
-  ! grep -Fq -- '"Super_L"' "$file" || fail 'unexpected Super_L in single-key managed block'
-  bindings_validate "$file" || fail 'bindings validation failed on single-key file'
+  bindings_validate "$file" || fail 'bindings validation failed on generated file'
 }
 
 test_managed_block_multi_modifier_and_clean_removal() {
@@ -151,32 +119,34 @@ test_managed_block_multi_modifier_and_clean_removal() {
   printf '%s\n' 'o.bind("SUPER + B", "Browser", "browser")' >"$file"
   original="$(<"$file")"
   bindings_write_managed "$file" 'SUPER + CTRL + X' '' "$ROOT/bin/handy-trigger"
-  assert_contains "$file" '"Super_L"'
-  assert_contains "$file" '"Super_R"'
-  assert_contains "$file" '"Control_L"'
-  assert_contains "$file" '"Control_R"'
-  assert_eq "$(grep -Fc -- 'release = true' "$file")" 5
+  assert_contains "$file" '"SUPER + CTRL + X"'
+  assert_eq "$(grep -Fc -- 'release = true' "$file")" 1
   bindings_validate "$file" || fail 'bindings validation failed on multi-modifier file'
 
   bindings_remove_managed_block "$file" "$clean"
   assert_eq "$(<"$clean")" "$original"
-  ! grep -Fq -- 'Super_L' "$clean" || fail 'Super_L leaked outside managed block'
   ! grep -Fq -- 'handy-trigger' "$clean" || fail 'handy-trigger leaked outside managed block'
   bindings_validate "$clean" || fail 'bindings validation failed on cleaned file'
 }
 
-test_managed_block_modifier_release_idempotency() {
-  local file="$WORK/mod-idempotency.lua" first second
-  printf '%s\n' 'o.bind("F9", "Stock", "action")' >"$file"
-  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
-  first="$(<"$file")"
-  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
-  second="$(<"$file")"
-  assert_eq "$second" "$first"
-  assert_eq "$(grep -Fc -- '"Alt_L"' "$file")" 1
-  assert_eq "$(grep -Fc -- '"Alt_R"' "$file")" 1
-  assert_eq "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$file")" 1
-  bindings_validate "$file" || fail 'bindings validation failed after idempotent write'
+test_chord_watcher_parses_any_modifier_and_key() {
+  python3 -c '
+from importlib.machinery import SourceFileLoader
+watcher = SourceFileLoader("watcher", "'"$ROOT"'/bin/handy-chord-watcher").load_module()
+parse_shortcut = watcher.parse_shortcut
+
+base, mods = parse_shortcut("ALT + SPACE")
+assert len(base) == 1 and len(mods) == 1
+
+base, mods = parse_shortcut("SUPER + CTRL + SHIFT + ALT + SPACE")
+assert len(base) == 1 and len(mods) == 4
+
+base, mods = parse_shortcut("F9")
+assert len(base) == 1 and len(mods) == 0
+
+base, mods = parse_shortcut("CTRL + RETURN")
+assert len(base) >= 1 and len(mods) == 1
+' || fail 'chord watcher parser failed'
 }
 
 test_detects_push_to_talk_over_toggle_across_user_and_stock_files
@@ -188,9 +158,7 @@ test_detects_non_string_action_conflicts
 test_previous_action_is_readable_and_write_is_idempotent
 test_managed_block_unbinds_all_voxtype_keys
 test_managed_block_rejects_malformed_detected_key
-test_modifier_release_keys_extraction
-test_managed_block_emits_modifier_release_bindings
-test_managed_block_single_key_has_no_modifier_releases
+test_managed_block_emits_clean_bindings
 test_managed_block_multi_modifier_and_clean_removal
-test_managed_block_modifier_release_idempotency
+test_chord_watcher_parses_any_modifier_and_key
 printf 'binding conflict tests: ok\n'
