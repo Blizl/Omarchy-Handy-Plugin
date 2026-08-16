@@ -46,6 +46,13 @@ test_non_empty_dictation_passes() {
   assert_result passed
 }
 
+test_non_empty_dictation_with_padding_passes() {
+  new_fixture
+  run_helper $'  this is a real test with spaces  \n'
+  [[ "$RUN_STATUS" == 0 ]] || return 1
+  assert_result passed
+}
+
 test_whitespace_only_dictation_fails() {
   new_fixture
   run_helper $' \t\n'
@@ -69,7 +76,9 @@ test_instructions_explain_handy_and_conflict_safety() {
   set -e
   [[ "$RUN_STATUS" == 0 ]] || return 1
   [[ "$output" == *'tests Handy with the selected shortcut: ALT + SPACE'* ]] || return 1
-  [[ "$output" == *'Setup disabled any conflicting VoxType shortcut before opening this window.'* ]]
+  [[ "$output" == *'Setup disabled any conflicting VoxType shortcut before opening this window.'* ]] || return 1
+  [[ "$output" == *'Dictated text:'* ]] || return 1
+  [[ "$output" == *'----------------------------------------------------------------------'* ]]
 }
 
 test_pid_file_identifies_live_helper_and_is_removed() {
@@ -137,6 +146,7 @@ test_invalid_arguments_are_rejected() {
 
 for test_name in \
   test_non_empty_dictation_passes \
+  test_non_empty_dictation_with_padding_passes \
   test_whitespace_only_dictation_fails \
   test_eof_is_a_failed_test \
   test_instructions_explain_handy_and_conflict_safety \

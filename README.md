@@ -2,8 +2,9 @@
 
 `blizl.handy` is a Quattro-native bar widget and push-to-talk integration for
 [Handy](https://github.com/cjpais/Handy). It keeps a microphone glyph visible,
-shows capture state directly from PipeWire, and prevents a key release from
-starting Handy when its matching key press was rejected.
+shows capture state directly from PipeWire, provides modifier release safety for
+multi-key shortcuts, and prevents a key release from starting Handy when its
+matching key press was rejected.
 
 ## About Handy
 
@@ -76,15 +77,15 @@ VoxType may remain installed, but Handy becomes Omarchy's only active dictation
 integration until uninstall restores the previous controls.
 
 Setup also replaces the built-in center Dictation indicator with Handy, then
-opens a focused test window that clearly identifies Handy as the engine. It
-commits only when that window receives non-empty dictated text.
+runs an inline acceptance test directly in the active terminal that clearly
+identifies Handy as the engine. It commits only when that test receives
+non-empty dictated text.
 
-If the dictation test fails or the test window closes without text, setup
-restores the previous bindings, shell layout, Handy and VoxType shortcut
-settings, autostart, and process state. It then disables and removes the
-installed `blizl.handy` plugin, avoiding a partially configured integration.
-VoxType removal is never the default and is offered only after the dictation
-test succeeds.
+If the dictation test fails or ends without text, setup restores the previous
+bindings, shell layout, Handy and VoxType shortcut settings, autostart, and
+process state. It then disables and removes the installed `blizl.handy` plugin,
+avoiding a partially configured integration. VoxType removal is never the
+default and is offered only after the dictation test succeeds.
 
 Supported shortcut choices are a detected VoxType shortcut, `ALT + SPACE`, or a
 custom Omarchy shortcut. Replacing a non-VoxType action requires confirmation.
@@ -105,6 +106,15 @@ an emergency stop that finishes the active dictation and preserves its text. If
 Handy cannot finish it, the trigger cancels the recording and sends a failure
 notification. Middle-click opens Omarchy's audio panel. Clicking while no
 default microphone exists sends a notification instead.
+
+### Push-to-talk and modifier release safety
+
+Push-to-talk shortcuts (such as `ALT + SPACE` or custom key chords) include
+modifier release safety: recording stops reliably regardless of which key in
+the combination is let go first. When any key in the chord is released, the
+trigger disarms the active recording session and finishes transcription.
+Releasing any remaining key afterward is safely ignored, preventing Handy from
+getting stuck in recording mode or triggering a duplicate toggle.
 
 ## Remove the integration
 

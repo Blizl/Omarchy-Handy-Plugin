@@ -273,7 +273,7 @@ explain_voxtype_replacement() {
   voxtype_is_available || return 0
 
   say "Handy will replace VoxType as Omarchy's dictation engine while this plugin is installed."
-  say "Setup will disable any VoxType hotkeys, bindings, and the center Dictation indicator before the Handy test window opens."
+  say "Setup will disable any VoxType hotkeys, bindings, and the center Dictation indicator before the Handy test runs."
   say "VoxType stays installed unless you remove it later; uninstall restores its previous controls."
 }
 
@@ -439,20 +439,12 @@ run_dictation_test_window() {
   pid_file="$test_directory/helper.pid"
   TEST_WINDOW_PID_FILE="$pid_file"
 
-  say "Opening a separate Handy dictation test window."
-  if [[ -n "${BLIZL_HANDY_TEST_WINDOW_BIN:-}" ]]; then
-    BLIZL_HANDY_TEST_PID_FILE="$pid_file" \
-      "$BLIZL_HANDY_TEST_WINDOW_BIN" "$result_file" "$SELECTED_SHORTCUT" &
-  else
-    BLIZL_HANDY_TEST_PID_FILE="$pid_file" \
-      omarchy launch tui --app-id=blizl.handy-test \
-      "$PLUGIN_ROOT/bin/handy-test-window" "$result_file" "$SELECTED_SHORTCUT" &
-  fi
-  TEST_WINDOW_PID=$!
-
+  say "Testing Handy push-to-talk in this terminal."
+  local test_bin="${BLIZL_HANDY_TEST_WINDOW_BIN:-$PLUGIN_ROOT/bin/handy-test-window}"
   launch_status=0
-  wait "$TEST_WINDOW_PID" || launch_status=$?
-  TEST_WINDOW_PID=''
+  BLIZL_HANDY_TEST_PID_FILE="$pid_file" \
+    "$test_bin" "$result_file" "$SELECTED_SHORTCUT" || launch_status=$?
+
   if [[ -f "$pid_file" ]]; then
     helper_pid="$(<"$pid_file")"
     if [[ "$helper_pid" =~ ^[0-9]+$ && "$helper_pid" != "$$" ]]; then
@@ -476,7 +468,7 @@ run_dictation_test_window() {
 dictation_test() {
   [[ "${BLIZL_HANDY_DICTATION_TEST:-}" == passed ]] && return 0
   if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true && -z "${BLIZL_HANDY_TEST_WINDOW_BIN:-}" ]]; then
-    fail "a graphical dictation test is required before setup can commit"
+    fail "a dictation test is required before setup can commit"
   fi
   DICTATION_TEST_STARTED=true
   say "Now test Handy push-to-talk by holding $SELECTED_SHORTCUT and speaking one sentence."

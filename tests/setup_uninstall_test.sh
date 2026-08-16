@@ -363,7 +363,7 @@ test_setup_disables_native_voxtype_before_handy_test() {
     fail "setup did not explain retained VoxType ownership: $output"
   [[ "$output" == *'Handy will replace VoxType as Omarchy'\''s dictation engine'* ]] ||
     fail "setup did not explain the complete VoxType replacement: $output"
-  [[ "$output" == *'before the Handy test window opens'* ]] ||
+  [[ "$output" == *'before the Handy test runs'* ]] ||
     fail "setup did not explain when VoxType controls are disabled: $output"
   [[ "$output" == *'Now test Handy push-to-talk'* ]] ||
     fail "setup did not identify the Handy test: $output"
@@ -442,13 +442,12 @@ test_non_overlapping_voxtype_shortcut_needs_no_conflict_confirmation() {
   "$ROOT/bin/uninstall" >/dev/null
 }
 
-test_setup_launches_the_test_through_omarchy() {
+test_setup_runs_dictation_test_inline_in_terminal() {
   make_fixture
   printf '%s\n' \
     '#!/usr/bin/env bash' \
-    'if [[ ${1:-} == launch && ${2:-} == tui ]]; then' \
-    '  printf "%s\n" "$*" >"$HOME/.omarchy-test-window-args"' \
-    '  printf "dictated words\n" | "$4" "$5" "$6"' \
+    'if [[ ${1:-} == launch ]]; then' \
+    '  printf "%s\n" "$*" >>"$HOME/.omarchy-launch-called"' \
     'fi' \
     'exit 0' >"$WORK/bin/omarchy"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/uwsm-app"
@@ -456,10 +455,11 @@ test_setup_launches_the_test_through_omarchy() {
   export BLIZL_HANDY_NONINTERACTIVE=false
   unset BLIZL_HANDY_DICTATION_TEST BLIZL_HANDY_TEST_WINDOW_BIN
 
-  printf '\n' | "$ROOT/bin/setup" >/dev/null
+  printf '\ndictated words\n' | "$ROOT/bin/setup" >/dev/null
 
-  grep -Fq -- "launch tui --app-id=blizl.handy-test $ROOT/bin/handy-test-window" \
-    "$HOME/.omarchy-test-window-args" || fail 'setup did not use the Omarchy test window launcher'
+  [[ ! -e "$HOME/.omarchy-launch-called" ]] ||
+    fail 'setup unexpectedly spawned a detached window via omarchy launch'
+  assert_file "$BLIZL_HANDY_STATE_DIR/install.json"
   "$ROOT/bin/uninstall" >/dev/null
 }
 
@@ -654,7 +654,7 @@ test_setup_disables_native_voxtype_before_handy_test
 test_conflict_approval_does_not_approve_voxtype_removal
 test_setup_unbinds_stock_voxtype_before_claiming_its_key
 test_non_overlapping_voxtype_shortcut_needs_no_conflict_confirmation
-test_setup_launches_the_test_through_omarchy
+test_setup_runs_dictation_test_inline_in_terminal
 test_failed_test_removes_an_installed_checkout
 test_failed_test_attempts_plugin_removal_after_incomplete_rollback
 test_failed_test_reports_plugin_removal_failure_when_checkout_remains
