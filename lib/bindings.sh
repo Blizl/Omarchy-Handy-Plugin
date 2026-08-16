@@ -107,49 +107,6 @@ bindings_action_for_key() {
   ' "$bindings_file"
 }
 
-bindings_normalize_shortcut() {
-  local shortcut="${1^^}" compact part key result='' canonical
-  local -a parts=()
-  local has_ctrl=false has_alt=false has_shift=false has_super=false
-
-  compact="${shortcut// /}"
-  IFS='+' read -r -a parts <<<"$compact"
-  ((${#parts[@]} > 0)) || return 1
-  key="${parts[${#parts[@]} - 1]}"
-  [[ -n "$key" ]] || return 1
-  unset "parts[$((${#parts[@]} - 1))]"
-
-  case "$key" in
-    ENTER) key="RETURN" ;;
-    ESC) key="ESCAPE" ;;
-    *) ;;
-  esac
-
-  for part in "${parts[@]}"; do
-    case "$part" in
-      LEFTCTRL | RIGHTCTRL | CTRL | CONTROL | MOD3) has_ctrl=true ;;
-      LEFTALT | RIGHTALT | ALT | MOD1) has_alt=true ;;
-      LEFTSHIFT | RIGHTSHIFT | SHIFT) has_shift=true ;;
-      LEFTSUPER | RIGHTSUPER | LEFTMETA | RIGHTMETA | SUPER | META | MOD4 | WIN | LOGO) has_super=true ;;
-      '') ;;
-      *) return 1 ;;
-    esac
-  done
-
-  for canonical in CTRL ALT SHIFT SUPER; do
-    case "$canonical" in
-      CTRL) [[ "$has_ctrl" == true ]] || continue ;;
-      ALT) [[ "$has_alt" == true ]] || continue ;;
-      SHIFT) [[ "$has_shift" == true ]] || continue ;;
-      SUPER) [[ "$has_super" == true ]] || continue ;;
-    esac
-    [[ -n "$result" ]] && result+=" + "
-    result+="$canonical"
-  done
-  [[ -n "$result" ]] && result+=" + "
-  printf '%s\n' "${result}${key}"
-}
-
 bindings_modifier_release_keys() {
   local shortcut="$1" part key
   local -a parts=() release_keys=()
@@ -200,7 +157,7 @@ bindings_write_managed() {
   local key="$2"
   local previous_action="${3:-}"
   local trigger_path="$4"
-  local voxtype_keys="${5:-$key}" managed_key mod_release_key selected_unbound=false temporary clean normalized_key
+  local voxtype_keys="${5:-$key}" managed_key mod_release_key selected_unbound=false temporary clean
   local -a modifier_releases=()
 
   [[ "$key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
@@ -215,12 +172,10 @@ bindings_write_managed() {
     }
   done <<<"$voxtype_keys"
 
-  normalized_key="$(bindings_normalize_shortcut "$key" 2>/dev/null || printf '%s' "$key")"
-
   while IFS= read -r mod_release_key; do
     [[ -n "$mod_release_key" ]] || continue
     modifier_releases+=("$mod_release_key")
-  done < <(bindings_modifier_release_keys "$normalized_key")
+  done < <(bindings_modifier_release_keys "$key")
 
   temporary="$(mktemp "${bindings_file}.tmp.XXXXXX")"
   clean="$(mktemp "${bindings_file}.clean.XXXXXX")"
@@ -233,20 +188,15 @@ bindings_write_managed() {
     if [[ -n "$previous_action" ]]; then
       printf '%s\n' "-- Previous action: ${previous_action//$'\n'/ }"
     fi
-    local normalized_unbound=false
     while IFS= read -r managed_key; do
       [[ -n "$managed_key" ]] || continue
       [[ "$managed_key" == "$key" ]] && selected_unbound=true
-      [[ "$managed_key" == "$normalized_key" ]] && normalized_unbound=true
       printf 'hl.unbind("%s")\n' "$managed_key"
     done <<<"$voxtype_keys"
     [[ "$selected_unbound" == true ]] || printf 'hl.unbind("%s")\n' "$key"
-    if [[ "$normalized_unbound" != true && "$normalized_key" != "$key" ]]; then
-      printf 'hl.unbind("%s")\n' "$normalized_key"
-    fi
     printf '\n'
-    printf 'o.bind(\n  "%s",\n  "Start Handy dictation",\n  "%s press"\n)\n\n' "$normalized_key" "$trigger_path"
-    printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$normalized_key" "$trigger_path"
+    printf 'o.bind(\n  "%s",\n  "Start Handy dictation",\n  "%s press"\n)\n\n' "$key" "$trigger_path"
+    printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$key" "$trigger_path"
     if ((${#modifier_releases[@]} > 0)); then
       printf '\n'
       printf '%s\n' "-- Releasing either the chord or individual modifier key(s) stops dictation,"
