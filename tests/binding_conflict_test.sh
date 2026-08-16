@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+WORK="$(mktemp -d)"
+trap 'rm -rf -- "$WORK"' EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+assert_eq() { [[ "$1" == "$2" ]] || fail "expected [$2], got [$1]"; }
+assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain [$2]"; }
+
+# shellcheck disable=SC1091
+source "$ROOT/lib/bindings.sh"
+
+test_detects_push_to_talk_over_toggle_across_user_and_stock_files() {
+  local user="$WORK/user.lua" stock="$WORK/stock.lua"
+  cat >"$user" <<'LUA'
+o.bind("SUPER + CTRL + X", "Toggle dictation", "voxtype record toggle")
+LUA
+  cat >"$stock" <<'LUA'
+o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")
+o.bind("F9", "Stop dictation (push-to-talk)", "voxtype record stop", { release = true })
+LUA
+  assert_eq "$(bindings_detect_voxtype_key "$user" "$stock")" 'F9'
+}
+
+test_user_push_to_talk_wins_when_both_sources_have_one() {
+  local user="$WORK/user-priority.lua" stock="$WORK/stock-priority.lua"
+  printf '%s\n' 'o.bind("ALT + SPACE", "My push-to-talk", "voxtype record start")' >"$user"
+  printf '%s\n' 'o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")' >"$stock"
+  assert_eq "$(bindings_detect_voxtype_key "$user" "$stock")" 'ALT + SPACE'
+}
+
+test_missing_voxtype_bindings_are_not_an_error() {
+  local empty="$WORK/empty.lua"
+  : >"$empty"
+  assert_eq "$(bindings_detect_voxtype_key "$empty" "$WORK/not-installed.lua")" ''
+}
+
+test_managed_block_unbinds_even_without_previous_action() {
+  local file="$WORK/no-previous.lua"
+  printf '%s\n' 'o.bind("F9", "Open terminal", "kitty")' >"$file"
+  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
+  assert_contains "$file" 'hl.unbind("ALT + SPACE")'
+  assert_eq "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$file")" 1
+  ! grep -Fq -- '-- Previous action:' "$file" || fail 'unexpected previous-action comment'
+}
+
+test_detects_non_string_action_conflicts() {
+  local file="$WORK/table-action.lua"
+  printf '%s\n' 'o.bind("SUPER + B", "Browser", { launch = "chromium" })' >"$file"
+  assert_eq "$(bindings_action_for_key "$file" 'SUPER + B')" \
+    'Browser: { launch = "chromium" }'
+}
+
+test_previous_action_is_readable_and_write_is_idempotent() {
+  local file="$WORK/idempotent.lua" first second
+  printf '%s\n' 'o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")' >"$file"
+  bindings_write_managed "$file" F9 \
+    'Start dictation (push-to-talk): voxtype record start' "$ROOT/bin/handy-trigger"
+  assert_contains "$file" '-- Previous action: Start dictation (push-to-talk): voxtype record start'
+  assert_contains "$file" $'-- Previous action: Start dictation (push-to-talk): voxtype record start\nhl.unbind("F9")'
+  first="$(<"$file")"
+  bindings_write_managed "$file" F9 \
+    "$(bindings_action_for_key "$file" F9)" "$ROOT/bin/handy-trigger"
+  second="$(<"$file")"
+  assert_eq "$second" "$first"
+  assert_eq "$(grep -Fc -- 'hl.unbind("F9")' "$file")" 1
+  assert_eq "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$file")" 1
+}
+
+test_detects_push_to_talk_over_toggle_across_user_and_stock_files
+test_user_push_to_talk_wins_when_both_sources_have_one
+test_missing_voxtype_bindings_are_not_an_error
+test_managed_block_unbinds_even_without_previous_action
+test_detects_non_string_action_conflicts
+test_previous_action_is_readable_and_write_is_idempotent
+printf 'binding conflict tests: ok\n'

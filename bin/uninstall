@@ -10,6 +10,7 @@ STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
 INSTALL_FILE="$STATE_ROOT/install.json"
 HANDY_WAS_RUNNING=false
 HANDY_RESTARTED=false
+VOXTYPE_HOTKEY_DISABLED=false
 
 restart_handy_if_needed() {
   if [[ "$HANDY_WAS_RUNNING" == true && "$HANDY_RESTARTED" != true ]]; then
@@ -30,6 +31,7 @@ if [[ ! -f "$INSTALL_FILE" ]]; then
 fi
 
 transaction_dir="$(jq -er '.transaction' "$INSTALL_FILE")"
+VOXTYPE_HOTKEY_DISABLED="$(jq -r '.voxtypeHotkeyDisabled // false' "$INSTALL_FILE")"
 [[ "$transaction_dir" == "$STATE_ROOT/backups/"* ]] || {
   echo "Refusing unexpected transaction path: $transaction_dir" >&2
   exit 1
@@ -45,6 +47,10 @@ if pgrep -x handy >/dev/null 2>&1; then
 fi
 
 transaction_restore "$transaction_dir"
+if [[ "$VOXTYPE_HOTKEY_DISABLED" == true ]] && command -v systemctl >/dev/null 2>&1 &&
+  systemctl --user is-active voxtype.service >/dev/null 2>&1; then
+  systemctl --user restart voxtype.service >/dev/null
+fi
 rm -f -- "$INSTALL_FILE"
 restart_handy_if_needed
 

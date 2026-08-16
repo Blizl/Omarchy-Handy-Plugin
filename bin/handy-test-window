@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# setup opens the terminal; this child only runs the acceptance test.
+# Its result file contains exactly one word: passed or failed.
+
+usage() {
+  printf 'Usage: %s RESULT_FILE SHORTCUT_LABEL\n' "${0##*/}" >&2
+}
+
+write_result() {
+  local result_file=$1 result=$2 temporary
+
+  temporary="$(mktemp "${result_file}.tmp.XXXXXX")"
+  if ! printf '%s\n' "$result" >"$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  if ! mv -f -- "$temporary" "$result_file"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
+remove_pid_file() {
+  [[ -n "${TEST_PID_FILE:-}" && -f "$TEST_PID_FILE" ]] || return 0
+  [[ "$(<"$TEST_PID_FILE")" == "$$" ]] && rm -f -- "$TEST_PID_FILE"
+}
+
+write_pid_file() {
+  local temporary
+  [[ -n "$TEST_PID_FILE" ]] || return 0
+  mkdir -p -- "$(dirname -- "$TEST_PID_FILE")"
+  temporary="$(mktemp "${TEST_PID_FILE}.tmp.XXXXXX")"
+  printf '%s\n' "$$" >"$temporary"
+  mv -f -- "$temporary" "$TEST_PID_FILE"
+  trap 'exit 130' HUP INT
+  trap 'exit 143' TERM
+  trap remove_pid_file EXIT
+}
+
+main() {
+  local result_file shortcut_label dictated_line='' result=failed
+  TEST_PID_FILE="${BLIZL_HANDY_TEST_PID_FILE:-}"
+
+  [[ $# == 2 && -n "$1" && -n "$2" ]] || {
+    usage
+    return 64
+  }
+  result_file=$1
+  shortcut_label=$2
+  [[ ! -d "$result_file" ]] || {
+    printf 'handy-test-window: result path is a directory: %s\n' "$result_file" >&2
+    return 64
+  }
+
+  mkdir -p -- "$(dirname -- "$result_file")"
+  rm -f -- "$result_file"
+  write_pid_file
+  printf '\nHandy dictation test\n\n'
+  printf 'Keep this test window focused.\n'
+  printf 'Hold %s, speak one sentence, then release it.\n' "$shortcut_label"
+  printf 'The dictated text should appear below. Press Enter when complete.\n\n'
+  printf 'Dictated text: '
+
+  # EOF is a normal failed test; read may still leave text without a newline.
+  IFS= read -r dictated_line || true
+  [[ "$dictated_line" =~ [^[:space:]] ]] && result=passed
+  write_result "$result_file" "$result"
+
+  if [[ "$result" == passed ]]; then
+    printf '\nDictation received. The Handy test passed.\n'
+    return 0
+  fi
+  printf '\nNo dictated text was received. The Handy test failed.\n' >&2
+  return 1
+}
+
+main "$@"

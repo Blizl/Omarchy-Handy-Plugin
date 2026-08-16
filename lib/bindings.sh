@@ -7,9 +7,19 @@ bindings_remove_managed_block() {
   local input="$1"
   local output="$2"
   awk -v begin="$HANDY_BINDINGS_BEGIN" -v end="$HANDY_BINDINGS_END" '
-    $0 == begin { managed = 1; next }
-    $0 == end { managed = 0; next }
-    !managed { print }
+    { lines[NR] = $0 }
+    END {
+      for (line = 1; line <= NR; line++) {
+        if (lines[line] == begin) {
+          if (out_count > 0 && output[out_count] == "") out_count--
+          managed = 1
+          continue
+        }
+        if (lines[line] == end) { managed = 0; continue }
+        if (!managed) output[++out_count] = lines[line]
+      }
+      for (line = 1; line <= out_count; line++) print output[line]
+    }
   ' "$input" >"$output"
 }
 
@@ -26,23 +36,56 @@ bindings_validate() {
 }
 
 bindings_detect_voxtype_key() {
-  local bindings_file="$1"
-  perl -ne '
-    next if /^\s*--/; $source .= $_;
-    END { if ($source =~ /o\.bind\(\s*"([^"]+)"\s*,.*?voxtype.*?\)/si) { print "$1\n" } }
-  ' "$bindings_file"
+  local bindings_file candidate key score best_key='' best_score=0
+
+  # Accept the user bindings first and an optional stock binding file second.
+  # A push-to-talk start action is more specific than a toggle action, so a
+  # stock start binding still wins when the user file only contains a toggle.
+  for bindings_file in "$@"; do
+    [[ -f "$bindings_file" ]] || continue
+    candidate="$(perl -0777 -ne '
+      my $source = $_;
+      $source =~ s/--[^\n]*//g;
+      my ($best_key, $best_score) = ("", 0);
+      while ($source =~ /o\.bind\(\s*"([^"]+)"\s*,\s*(?:"[^"]*"|nil)\s*,\s*(?:"([^"]*)"|nil)/g) {
+        my ($key, $command) = ($1, $2 // "");
+        next unless $command =~ /\bvoxtype\b/i;
+        my $score = $command =~ /\bvoxtype\s+record\s+start\b/i ? 2 :
+                    $command =~ /\bvoxtype\s+record\s+toggle\b/i ? 1 :
+                    $command =~ /\bvoxtype\s+record\s+stop\b/i ? 0 : 1;
+        if ($score > $best_score) {
+          ($best_key, $best_score) = ($key, $score);
+        }
+      }
+      print "$best_key\t$best_score\n" if $best_score;
+    ' "$bindings_file")"
+    [[ -n "$candidate" ]] || continue
+    key="${candidate%%$'\t'*}"
+    score="${candidate##*$'\t'}"
+    if ((score > best_score)); then
+      best_key="$key"
+      best_score="$score"
+    fi
+  done
+  if [[ -n "$best_key" ]]; then
+    printf '%s\n' "$best_key"
+  fi
 }
 
 bindings_action_for_key() {
   local bindings_file="$1"
   local key="$2"
-  KEY="$key" perl -ne '
-    next if /^\s*--/; $source .= $_;
+  [[ -f "$bindings_file" ]] || return 0
+  BEGIN_MARKER="$HANDY_BINDINGS_BEGIN" END_MARKER="$HANDY_BINDINGS_END" KEY="$key" perl -ne '
+    if ($_ eq "$ENV{BEGIN_MARKER}\n") { $managed = 1; next }
+    if ($_ eq "$ENV{END_MARKER}\n") { $managed = 0; next }
+    next if $managed || /^\s*--/; $source .= $_;
     END {
     my $key = quotemeta($ENV{KEY});
-    if ($source =~ /o\.bind\(\s*"$key"\s*,\s*(?:"([^"]*)"|nil)\s*,\s*([^\n\)]*)/si) {
+    if ($source =~ /o\.bind\(\s*"$key"\s*,\s*(?:"([^"]*)"|nil)\s*,\s*(?:"([^"]*)"|([^\n\)]*))/si) {
       my $description = defined($1) ? $1 : "unnamed action";
-      my $command = $2 // ""; $command =~ s/^\s+|\s+$//g;
+      my $command = defined($2) ? $2 : ($3 // "");
+      $command =~ s/^\s+|\s+$//g;
       print "$description: $command\n";
     } }
   ' "$bindings_file"
@@ -70,8 +113,8 @@ bindings_write_managed() {
     printf '\n%s\n' "$HANDY_BINDINGS_BEGIN"
     if [[ -n "$previous_action" ]]; then
       printf '%s\n' "-- Previous action: ${previous_action//$'\n'/ }"
-      printf 'hl.unbind("%s")\n\n' "$key"
     fi
+    printf 'hl.unbind("%s")\n\n' "$key"
     printf 'o.bind(\n  "%s",\n  "Start Handy dictation",\n  "%s press"\n)\n\n' "$key" "$trigger_path"
     printf 'o.bind(\n  "%s",\n  "Stop Handy dictation",\n  "%s release",\n  { release = true }\n)\n' "$key" "$trigger_path"
     printf '%s\n' "$HANDY_BINDINGS_END"

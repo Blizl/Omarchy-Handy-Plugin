@@ -64,9 +64,16 @@ omarchy plugin add https://github.com/Blizl/Omarchy-Handy-Plugin.git --enable \
 
 Setup opens Handy's official onboarding for model selection. It then asks which
 push-to-talk shortcut to own, moves Handy's internal shortcut to a reserved
-chord so both layers cannot fire, installs press/release Hyprland bindings, and
-runs a real dictation test. VoxType removal is never the default and is offered
-only after that test succeeds.
+chord, disables VoxType's native hotkey when present, and unbinds any stock
+VoxType action on the selected key. Setup then opens a focused test window where
+the user dictates one line. It commits only when that window receives non-empty
+text.
+
+If the dictation test fails or the test window closes without text, setup
+restores the previous bindings, Handy and VoxType shortcut settings, autostart,
+and process state. It then disables and removes the installed `blizl.handy`
+plugin, avoiding a partially configured integration. VoxType removal is never
+the default and is offered only after the dictation test succeeds.
 
 Supported shortcut choices are a detected VoxType shortcut, `ALT + SPACE`, or a
 custom Omarchy shortcut. Replacing a non-VoxType action requires confirmation.
@@ -94,8 +101,9 @@ Run the plugin's uninstaller before removing its checkout:
 omarchy plugin remove blizl.handy
 ```
 
-The uninstaller restores the previous Hyprland bindings, Handy shortcut, and
-autostart file. It does not remove Handy, downloaded models, or VoxType.
+The uninstaller restores the previous Hyprland bindings, Handy shortcut,
+VoxType native-hotkey setting, and autostart file. It does not remove Handy,
+downloaded models, or VoxType.
 
 To remove the plugin and Handy completely and return to native Omarchy
 VoxType, use the all-in-one recovery command instead. This interactive form

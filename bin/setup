@@ -11,25 +11,44 @@ source "$PLUGIN_ROOT/lib/handy-settings.sh"
 # Resolved from the installed plugin directory.
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/transaction.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/voxtype-settings.sh"
 
 STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
 BINDINGS_FILE="${HYPR_BINDINGS_FILE:-$HOME/.config/hypr/bindings.lua}"
 AUTOSTART_FILE="${HANDY_AUTOSTART_FILE:-$HOME/.config/autostart/Handy.desktop}"
 SETTINGS_FILE="$(handy_settings_file)"
 INSTALL_FILE="$STATE_ROOT/install.json"
+VOXTYPE_BINDINGS_FILE="${VOXTYPE_BINDINGS_FILE:-${OMARCHY_PATH:-/usr/share/omarchy}/default/hypr/bindings/voxtype.lua}"
+VOXTYPE_CONFIG="${VOXTYPE_CONFIG_FILE:-$HOME/.config/voxtype/config.toml}"
 HANDY_WAS_RUNNING=false
 HANDY_STARTED_BY_SETUP=false
 HANDY_INSTALLED=false
 VOXTYPE_REMOVED=false
 VOXTYPE_RECOVERY_ACTIVE=false
 VOXTYPE_RECOVERY=''
+VOXTYPE_HOTKEY_DISABLED=false
+VOXTYPE_WAS_ACTIVE=false
 CREATED_TRANSACTION=false
 COMMITTED=false
+DICTATION_TEST_STARTED=false
+TEST_WINDOW_PID=''
+TEST_WINDOW_DIR=''
+TEST_WINDOW_PID_FILE=''
 
 say() { printf '%s\n' "$*"; }
 fail() {
   printf 'setup: %s\n' "$*" >&2
   exit 1
+}
+
+voxtype_is_available() {
+  if [[ -n "${BLIZL_HANDY_VOXTYPE_PRESENT:-}" ]]; then
+    [[ "$BLIZL_HANDY_VOXTYPE_PRESENT" == true ]]
+  else
+    command -v voxtype >/dev/null 2>&1
+  fi
 }
 
 confirm() {
@@ -49,25 +68,86 @@ confirm() {
 }
 
 cleanup() {
-  local status=$?
+  local status=$? rollback_complete=true handy_restored=false handy_stopped=true helper_pid=''
+  if [[ -n "$TEST_WINDOW_PID_FILE" && -f "$TEST_WINDOW_PID_FILE" ]]; then
+    helper_pid="$(<"$TEST_WINDOW_PID_FILE")"
+    if [[ "$helper_pid" =~ ^[0-9]+$ && "$helper_pid" != "$$" ]]; then
+      kill "$helper_pid" >/dev/null 2>&1 || true
+      wait "$helper_pid" >/dev/null 2>&1 || true
+    fi
+    TEST_WINDOW_PID_FILE=''
+  fi
+  if [[ -n "$TEST_WINDOW_PID" ]]; then
+    kill "$TEST_WINDOW_PID" >/dev/null 2>&1 || true
+    wait "$TEST_WINDOW_PID" >/dev/null 2>&1 || true
+    TEST_WINDOW_PID=''
+  fi
+  if [[ -n "$TEST_WINDOW_DIR" && "$TEST_WINDOW_DIR" == "$STATE_ROOT"/dictation-test.* ]]; then
+    rm -rf -- "$TEST_WINDOW_DIR"
+    TEST_WINDOW_DIR=''
+  fi
   if ((status != 0)) && [[ "$CREATED_TRANSACTION" == true && "$COMMITTED" != true ]]; then
     say "Setup failed; restoring plugin-managed files."
     transaction_restore "$TRANSACTION_DIR" || {
       printf 'Setup rollback failed.\n' >&2
       status=1
+      rollback_complete=false
     }
     if [[ "$HANDY_STARTED_BY_SETUP" == true ]]; then
-      if [[ "$HANDY_WAS_RUNNING" == true ]]; then
-        handy --start-hidden >/dev/null 2>&1 &
+      pkill -x handy >/dev/null 2>&1 || true
+      for _ in {1..30}; do
+        pgrep -x handy >/dev/null 2>&1 || break
+        sleep 0.1
+      done
+      if pgrep -x handy >/dev/null 2>&1; then
+        printf 'Could not stop the setup-owned Handy process.\n' >&2
+        status=1
+        rollback_complete=false
+        handy_stopped=false
+      fi
+    fi
+    if [[ "$HANDY_WAS_RUNNING" == true && "$handy_stopped" == true ]]; then
+      if pgrep -x handy >/dev/null 2>&1; then
+        handy_restored=true
       else
-        pkill -x handy >/dev/null 2>&1 || status=1
+        handy --start-hidden >/dev/null 2>&1 &
+        for _ in {1..30}; do
+          if pgrep -x handy >/dev/null 2>&1; then
+            handy_restored=true
+            break
+          fi
+          sleep 0.1
+        done
+        if [[ "$handy_restored" != true ]]; then
+          printf 'Could not restore the pre-setup Handy process.\n' >&2
+          status=1
+          rollback_complete=false
+        fi
       fi
     fi
     if [[ "$HANDY_INSTALLED" == true ]]; then
-      sudo pacman -R --noconfirm handy-bin >/dev/null 2>&1 || status=1
+      sudo pacman -R --noconfirm handy-bin >/dev/null 2>&1 || {
+        status=1
+        rollback_complete=false
+      }
     fi
     if [[ "$VOXTYPE_RECOVERY_ACTIVE" == true || "$VOXTYPE_REMOVED" == true ]]; then
-      voxtype_restore || status=1
+      voxtype_restore || {
+        status=1
+        rollback_complete=false
+      }
+    fi
+    if [[ "$VOXTYPE_HOTKEY_DISABLED" == true && "$VOXTYPE_WAS_ACTIVE" == true ]]; then
+      systemctl --user restart voxtype.service >/dev/null 2>&1 || {
+        status=1
+        rollback_complete=false
+      }
+    fi
+    if [[ "$DICTATION_TEST_STARTED" == true ]]; then
+      if [[ "$rollback_complete" != true ]]; then
+        printf 'Setup rollback was incomplete; attempting plugin removal anyway.\n' >&2
+      fi
+      remove_plugin_after_failed_test || status=1
     fi
   fi
   return "$status"
@@ -85,6 +165,7 @@ preflight() {
   transaction_safe_target "$BINDINGS_FILE" || fail "bindings path resolves outside the supported user configuration roots"
   transaction_safe_target "$SETTINGS_FILE" || fail "Handy settings path resolves outside the supported user configuration roots"
   transaction_safe_target "$AUTOSTART_FILE" || fail "autostart path resolves outside the supported user configuration roots"
+  transaction_safe_target "$VOXTYPE_CONFIG" || fail "VoxType config path resolves outside the supported user configuration roots"
   transaction_safe_target "$INSTALL_FILE" || fail "state path resolves outside the supported user configuration roots"
   if [[ "${BLIZL_HANDY_FORCE_INSTALL:-false}" == true ]] || ! command -v handy >/dev/null; then
     command -v "${BLIZL_HANDY_INSTALL_BIN:-yay}" >/dev/null || fail "Handy is absent and no AUR installer was found (install yay)"
@@ -119,7 +200,11 @@ launch_onboarding() {
 
 select_shortcut() {
   local voxtype_key choice custom
-  voxtype_key="$(bindings_detect_voxtype_key "$BINDINGS_FILE")"
+  if voxtype_is_available; then
+    voxtype_key="$(bindings_detect_voxtype_key "$BINDINGS_FILE" "$VOXTYPE_BINDINGS_FILE")"
+  else
+    voxtype_key="$(bindings_detect_voxtype_key "$BINDINGS_FILE")"
+  fi
 
   if [[ -n "${BLIZL_HANDY_SHORTCUT:-}" ]]; then
     SELECTED_SHORTCUT="$BLIZL_HANDY_SHORTCUT"
@@ -153,6 +238,9 @@ select_shortcut() {
 configure_binding() {
   local existing trigger_path
   existing="$(bindings_action_for_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT")"
+  if [[ -z "$existing" ]] && voxtype_is_available; then
+    existing="$(bindings_action_for_key "$VOXTYPE_BINDINGS_FILE" "$SELECTED_SHORTCUT")"
+  fi
   if [[ -n "$existing" && "$existing" != *[Vv]ox[Tt]ype* ]]; then
     say "$SELECTED_SHORTCUT is currently bound to: $existing"
     confirm "Replace that action?" no || fail "shortcut replacement declined"
@@ -172,6 +260,25 @@ configure_handy_binding() {
   fi
   handy_settings_set_reserved "$SETTINGS_FILE"
   [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$HANDY_RESERVED_BINDING" ]] || fail "Handy did not retain the reserved shortcut"
+}
+
+configure_voxtype_hotkey() {
+  local disable_status=0
+  voxtype_is_available || return 0
+  [[ -f "$VOXTYPE_CONFIG" ]] || return 0
+
+  voxtype_hotkey_disable "$VOXTYPE_CONFIG" || disable_status=$?
+  case "$disable_status" in
+    "$VOXTYPE_SETTINGS_CHANGED")
+      VOXTYPE_HOTKEY_DISABLED=true
+      if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active voxtype.service >/dev/null 2>&1; then
+        VOXTYPE_WAS_ACTIVE=true
+        systemctl --user restart voxtype.service >/dev/null
+      fi
+      ;;
+    "$VOXTYPE_SETTINGS_NO_CHANGE") ;;
+    *) fail "VoxType's native hotkey configuration is malformed" ;;
+  esac
 }
 
 configure_autostart() {
@@ -220,11 +327,81 @@ start_handy_hidden() {
   fail "Handy did not start"
 }
 
+plugin_checkout_present() {
+  local installed_root
+  installed_root="$HOME/.config/omarchy/plugins/blizl.handy"
+  [[ -e "$installed_root" || -L "$installed_root" ]] || return 1
+  [[ "$(realpath -m -- "$PLUGIN_ROOT")" == "$(realpath -m -- "$installed_root")" ]]
+}
+
+plugin_is_installed_checkout() {
+  [[ -n "${BLIZL_HANDY_PLUGIN_REMOVE_BIN:-}" ]] && return 0
+  plugin_checkout_present
+}
+
+remove_plugin_after_failed_test() {
+  plugin_is_installed_checkout || return 0
+  say "Dictation did not pass; removing the blizl.handy plugin."
+  if [[ -n "${BLIZL_HANDY_PLUGIN_REMOVE_BIN:-}" ]]; then
+    "$BLIZL_HANDY_PLUGIN_REMOVE_BIN" blizl.handy --yes
+  else
+    omarchy plugin remove blizl.handy --yes
+  fi
+  if plugin_checkout_present; then
+    printf 'Plugin removal did not complete; the installed checkout remains.\n' >&2
+    return 1
+  fi
+}
+
+run_dictation_test_window() {
+  local test_directory result_file pid_file result line_count launch_status helper_pid=''
+  test_directory="$(mktemp -d "$STATE_ROOT/dictation-test.XXXXXX")"
+  TEST_WINDOW_DIR="$test_directory"
+  result_file="$test_directory/result"
+  pid_file="$test_directory/helper.pid"
+  TEST_WINDOW_PID_FILE="$pid_file"
+
+  say "Opening a separate Handy dictation test window."
+  if [[ -n "${BLIZL_HANDY_TEST_WINDOW_BIN:-}" ]]; then
+    BLIZL_HANDY_TEST_PID_FILE="$pid_file" \
+      "$BLIZL_HANDY_TEST_WINDOW_BIN" "$result_file" "$SELECTED_SHORTCUT" &
+  else
+    BLIZL_HANDY_TEST_PID_FILE="$pid_file" \
+      omarchy launch tui --app-id=blizl.handy-test \
+      "$PLUGIN_ROOT/bin/handy-test-window" "$result_file" "$SELECTED_SHORTCUT" &
+  fi
+  TEST_WINDOW_PID=$!
+
+  launch_status=0
+  wait "$TEST_WINDOW_PID" || launch_status=$?
+  TEST_WINDOW_PID=''
+  if [[ -f "$pid_file" ]]; then
+    helper_pid="$(<"$pid_file")"
+    if [[ "$helper_pid" =~ ^[0-9]+$ && "$helper_pid" != "$$" ]]; then
+      kill "$helper_pid" >/dev/null 2>&1 || true
+      wait "$helper_pid" >/dev/null 2>&1 || true
+    fi
+  fi
+  result=''
+  line_count=0
+  if [[ -f "$result_file" ]]; then
+    result="$(<"$result_file")"
+    line_count="$(wc -l <"$result_file")"
+  fi
+  rm -rf -- "$test_directory"
+  TEST_WINDOW_DIR=''
+  TEST_WINDOW_PID_FILE=''
+
+  ((launch_status == 0)) && [[ "$result" == passed ]] && [[ "$line_count" == 1 ]]
+}
+
 dictation_test() {
   [[ "${BLIZL_HANDY_DICTATION_TEST:-}" == passed ]] && return 0
-  [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true ]] && fail "set BLIZL_HANDY_DICTATION_TEST=passed only after a real dictation test"
-  say "Real dictation test: focus a text field, hold $SELECTED_SHORTCUT, speak, then release it."
-  confirm "Did the dictated text appear?" no || fail "dictation test did not pass"
+  if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true && -z "${BLIZL_HANDY_TEST_WINDOW_BIN:-}" ]]; then
+    fail "a graphical dictation test is required before setup can commit"
+  fi
+  DICTATION_TEST_STARTED=true
+  run_dictation_test_window || fail "dictation test did not produce text"
 }
 
 maybe_remove_voxtype() {
@@ -317,12 +494,14 @@ main() {
   transaction_backup "$BINDINGS_FILE"
   transaction_backup "$SETTINGS_FILE"
   transaction_backup "$AUTOSTART_FILE"
+  transaction_backup "$VOXTYPE_CONFIG"
   transaction_backup "$INSTALL_FILE"
 
   install_handy
   launch_onboarding
   [[ -f "$SETTINGS_FILE" ]] || fail "Handy settings do not exist; finish onboarding first"
   select_shortcut
+  configure_voxtype_hotkey
   configure_handy_binding
   configure_binding
   configure_autostart
@@ -337,8 +516,9 @@ main() {
     --arg shortcut "$SELECTED_SHORTCUT" \
     --arg reserved "$HANDY_RESERVED_BINDING" \
     --argjson handyInstalled "$HANDY_INSTALLED" \
+    --argjson voxtypeHotkeyDisabled "$VOXTYPE_HOTKEY_DISABLED" \
     --arg installedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{version: ($version | tonumber), transaction: $transaction, shortcut: $shortcut, reservedBinding: $reserved, handyInstalled: $handyInstalled, installedAt: $installedAt}' \
+    '{version: ($version | tonumber), transaction: $transaction, shortcut: $shortcut, reservedBinding: $reserved, handyInstalled: $handyInstalled, voxtypeHotkeyDisabled: $voxtypeHotkeyDisabled, installedAt: $installedAt}' \
     >"$INSTALL_FILE"
   maybe_remove_voxtype
   COMMITTED=true
