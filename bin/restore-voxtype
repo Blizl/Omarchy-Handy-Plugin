@@ -245,11 +245,26 @@ restore_stock_indicator() {
   local temporary
   temporary="$(mktemp "${SHELL_FILE}.tmp.XXXXXX")"
   jq '
+    def add_dictation:
+      if has("items") and (.items | type == "array") then
+        if ([.items[] | if type == "object" then .id else . end] | any(. == "Dictation"))
+        then .
+        else .items = ["Dictation"] + .items
+        end
+      elif has("indicators") and (.indicators | type == "array") then
+        if ([.indicators[] | if type == "object" then .id else . end] | any(. == "Dictation"))
+        then .
+        else .indicators = ["Dictation"] + .indicators
+        end
+      else .
+      end;
+
     .bar.layout |= (
       with_entries(
         .value |= map(
           select(.id != "blizl.handy")
           | if .id == "vliang.indicators" then .id = "omarchy.indicators" else . end
+          | if .id == "omarchy.indicators" then add_dictation else . end
         )
       )
     )

@@ -239,4 +239,34 @@ grep -Fq 'hl.unbind("F9")' "$previous_home/.config/hypr/bindings.lua" || fail 'p
 ! grep -Fq 'BEGIN blizl.handy' "$previous_home/.config/hypr/bindings.lua" || fail 'managed Handy bindings remained in preserve mode'
 ! grep -q '^handy-bin ' "$previous_packages" || fail 'Handy remained installed in preserve mode'
 
+items_home="$TEST_ROOT/items-home"
+items_packages="$TEST_ROOT/items-packages"
+mkdir -p "$items_home/.config/hypr" "$items_home/.config/omarchy" "$items_home/.config/voxtype"
+printf 'o.bind("SUPER + B", "Browser", "browser")\n' >"$items_home/.config/hypr/bindings.lua"
+printf 'voxtype-bin 1.0-1\n' >"$items_packages"
+cat >"$items_home/.config/omarchy/shell.json" <<'JSON'
+{
+  "version": 1,
+  "bar": {
+    "layout": {
+      "center": [{"id":"omarchy.indicators","items":["ScreenRecording","Dnd"]}]
+    }
+  }
+}
+JSON
+HOME="$items_home" \
+  PATH="$fake_bin:$PATH" \
+  OMARCHY_PATH="$omarchy_root" \
+  FAKE_PACKAGES="$items_packages" \
+  FAKE_COMMAND_LOG="$command_log" \
+  BLIZL_HANDY_STATE_DIR="$items_home/.local/state/blizl.handy" \
+  BLIZL_HANDY_PKG_ADD_BIN="$fake_bin/pkg-add" \
+  BLIZL_HANDY_PKG_DROP_BIN="$fake_bin/pkg-drop" \
+  BLIZL_HANDY_SKIP_CHECKPOINT=true \
+  BLIZL_HANDY_SKIP_MODEL_SETUP=true \
+  BLIZL_HANDY_SKIP_PLUGIN_REMOVE=true \
+  "$ROOT/bin/restore-voxtype" --yes --bindings stock --keep-plugin >/dev/null
+
+jq -e '.bar.layout.center[0].items[0] == "Dictation"' "$items_home/.config/omarchy/shell.json" >/dev/null || fail 'Dictation item was not restored to items list'
+
 printf 'restore-voxtype tests: ok\n'
