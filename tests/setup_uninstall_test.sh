@@ -379,9 +379,9 @@ test_setup_disables_native_voxtype_before_handy_test() {
 
 test_conflict_approval_does_not_approve_voxtype_removal() {
   make_fixture
-  local cache="$WORK/package-cache" remover="$WORK/bin/remove-voxtype"
+  local remover="$WORK/bin/remove-voxtype"
   export BLIZL_HANDY_VOXTYPE_PRESENT=true BLIZL_HANDY_CONFIRM_CONFLICT=yes
-  mkdir -p -- "$cache" "$(dirname -- "$VOXTYPE_CONFIG_FILE")"
+  mkdir -p -- "$(dirname -- "$VOXTYPE_CONFIG_FILE")"
   printf '%s\n' '[hotkey]' 'enabled = true' 'key = "SPACE"' \
     'modifiers = ["LEFTALT"]' >"$VOXTYPE_CONFIG_FILE"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/voxtype"
@@ -390,16 +390,15 @@ test_conflict_approval_does_not_approve_voxtype_removal() {
     '[[ ${1:-} == -Q && ${2:-} == voxtype-bin ]] && { echo "voxtype-bin 1.2.3"; exit 0; }' \
     'exit 1' >"$WORK/bin/pacman"
   printf '%s\n' '#!/usr/bin/env bash' ': >"$HOME/.voxtype-was-removed"' >"$remover"
-  printf 'package\n' >"$cache/voxtype-bin-1.2.3-1-x86_64.pkg.tar.zst"
   chmod +x "$WORK/bin/voxtype" "$WORK/bin/pacman" "$remover"
-  export BLIZL_HANDY_PACKAGE_CACHE_DIR="$cache" BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$remover"
+  export BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$remover"
 
   "$ROOT/bin/setup" >/dev/null
 
   [[ ! -e "$HOME/.voxtype-was-removed" ]] ||
     fail 'approving a shortcut conflict also approved VoxType removal'
   "$ROOT/bin/uninstall" >/dev/null
-  unset BLIZL_HANDY_CONFIRM_CONFLICT BLIZL_HANDY_PACKAGE_CACHE_DIR BLIZL_HANDY_VOXTYPE_REMOVE_BIN
+  unset BLIZL_HANDY_CONFIRM_CONFLICT BLIZL_HANDY_VOXTYPE_REMOVE_BIN
 }
 
 test_setup_unbinds_stock_voxtype_before_claiming_its_key() {
@@ -621,33 +620,32 @@ test_voxtype_removal_defaults_to_no() {
   "$ROOT/bin/uninstall"
 }
 
-test_voxtype_removal_uses_explicit_package_command() {
-  grep -F -- 'sudo pacman -R --noconfirm voxtype-bin' "$ROOT/bin/setup" >/dev/null ||
-    fail 'VoxType removal does not use an explicit non-interactive package command'
+test_voxtype_removal_uses_omarchy_pkg_drop() {
+  grep -F -- 'omarchy pkg drop voxtype-bin' "$ROOT/bin/setup" >/dev/null ||
+    fail 'VoxType removal does not use omarchy pkg drop'
 }
 
 test_partial_voxtype_removal_restores_everything() {
   make_fixture
-  local service="$HOME/.config/systemd/user/voxtype.service" config="$HOME/.config/voxtype/config" cache="$WORK/package-cache"
-  mkdir -p "$(dirname "$service")" "$(dirname "$config")" "$cache"
+  local service="$HOME/.config/systemd/user/voxtype.service" config="$HOME/.config/voxtype/config"
+  mkdir -p "$(dirname "$service")" "$(dirname "$config")"
   printf service-before >"$service"
   printf config-before >"$config"
-  printf package >"$cache/voxtype-bin-1.2.3-1-x86_64.pkg.tar.zst"
   printf '%s\n' '#!/usr/bin/env bash' 'case ${1:-} in is-enabled) echo disabled;; is-active) echo inactive;; *) exit 0;; esac' >"$WORK/bin/systemctl"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$WORK/bin/remove-voxtype"
   printf '%s\n' '#!/usr/bin/env bash' ': >"$HOME/.voxtype-restored-package"' >"$WORK/bin/install-voxtype"
   chmod +x "$WORK/bin/systemctl" "$WORK/bin/remove-voxtype" "$WORK/bin/install-voxtype"
   printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} == -Q && ${2:-} == voxtype-bin ]] && { echo "voxtype-bin 1.2.3"; exit 0; }' 'exit 1' >"$WORK/bin/pacman"
   chmod +x "$WORK/bin/pacman"
-  export BLIZL_HANDY_PACKAGE_CACHE_DIR="$cache" BLIZL_HANDY_REMOVE_VOXTYPE=yes BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$WORK/bin/remove-voxtype" BLIZL_HANDY_VOXTYPE_INSTALL_BIN="$WORK/bin/install-voxtype"
+  export BLIZL_HANDY_REMOVE_VOXTYPE=yes BLIZL_HANDY_VOXTYPE_REMOVE_BIN="$WORK/bin/remove-voxtype" BLIZL_HANDY_VOXTYPE_INSTALL_BIN="$WORK/bin/install-voxtype"
   local before_service before_config
   before_service="$(<"$service")" before_config="$(<"$config")"
   if "$ROOT/bin/setup" >/dev/null 2>&1; then fail 'failed VoxType removal unexpectedly succeeded'; fi
   assert_eq "$(<"$service")" "$before_service"
   assert_eq "$(<"$config")" "$before_config"
-  [[ -e "$HOME/.voxtype-restored-package" ]] || fail 'VoxType package artifact was not restored'
+  [[ -e "$HOME/.voxtype-restored-package" ]] || fail 'VoxType package was not restored'
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'partial setup committed install state'
-  unset BLIZL_HANDY_REMOVE_VOXTYPE BLIZL_HANDY_VOXTYPE_REMOVE_BIN BLIZL_HANDY_VOXTYPE_INSTALL_BIN BLIZL_HANDY_PACKAGE_CACHE_DIR
+  unset BLIZL_HANDY_REMOVE_VOXTYPE BLIZL_HANDY_VOXTYPE_REMOVE_BIN BLIZL_HANDY_VOXTYPE_INSTALL_BIN
 }
 
 test_uninstall_cleans_up_running_watcher_and_runtime_files() {
@@ -766,7 +764,7 @@ test_failed_dictation_window_restores_preexisting_handy_process
 test_setup_deduplicates_autostart_exec_lines
 test_fresh_install_uses_aur_aware_installer
 test_voxtype_removal_defaults_to_no
-test_voxtype_removal_uses_explicit_package_command
+test_voxtype_removal_uses_omarchy_pkg_drop
 test_partial_voxtype_removal_restores_everything
 test_uninstall_cleans_up_running_watcher_and_runtime_files
 test_setup_failure_cleanup_terminates_orphan_watcher

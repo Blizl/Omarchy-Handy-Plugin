@@ -157,15 +157,6 @@ latest_voxtype_recovery() {
     sort -r | head -n1
 }
 
-install_package_file() {
-  local artifact="$1"
-  if [[ -n "${BLIZL_HANDY_VOXTYPE_INSTALL_BIN:-}" ]]; then
-    "$BLIZL_HANDY_VOXTYPE_INSTALL_BIN" "$artifact"
-  else
-    sudo pacman -U --noconfirm "$artifact"
-  fi
-}
-
 install_native_packages() {
   if [[ -n "${BLIZL_HANDY_PKG_ADD_BIN:-}" ]]; then
     "$BLIZL_HANDY_PKG_ADD_BIN" wtype voxtype-bin
@@ -175,11 +166,7 @@ install_native_packages() {
 }
 
 restore_voxtype_recovery() {
-  local recovery="$1" artifact path relative
-  artifact="$(find "$recovery" -maxdepth 1 -type f -name 'voxtype-bin-*.pkg.tar.*' ! -name '*.sig' -print -quit)"
-  [[ -f "$artifact" ]] || return 1
-  install_package_file "$artifact"
-
+  local recovery="$1" path relative
   for path in "$HOME/.config/systemd/user/voxtype.service" "$HOME/.config/voxtype" "$HOME/.local/share/voxtype"; do
     relative="${path#/}"
     if [[ -e "$recovery/files/$relative" || -L "$recovery/files/$relative" ]]; then
@@ -194,13 +181,13 @@ ensure_voxtype() {
   local recovery='' used_recovery=false
   say "Installing native Omarchy VoxType"
   if ! pacman -Q voxtype-bin >/dev/null 2>&1; then
-    recovery="$(latest_voxtype_recovery || true)"
-    if [[ -n "$recovery" ]] && restore_voxtype_recovery "$recovery"; then
-      used_recovery=true
-      say "Restored the exact pre-plugin VoxType package and data"
-    else
-      install_native_packages
-    fi
+    install_native_packages
+  fi
+  recovery="$(latest_voxtype_recovery || true)"
+  if [[ -n "$recovery" && -d "$recovery/files" ]]; then
+    restore_voxtype_recovery "$recovery"
+    used_recovery=true
+    say "Restored previous VoxType configuration and data"
   fi
   pacman -Q voxtype-bin >/dev/null 2>&1 || fail "VoxType package installation failed"
 

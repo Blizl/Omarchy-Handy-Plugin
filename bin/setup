@@ -140,10 +140,17 @@ cleanup() {
       fi
     fi
     if [[ "$HANDY_INSTALLED" == true ]]; then
-      sudo pacman -R --noconfirm handy-bin >/dev/null 2>&1 || {
-        status=1
-        rollback_complete=false
-      }
+      if [[ -n "${BLIZL_HANDY_PKG_DROP_BIN:-}" ]]; then
+        "$BLIZL_HANDY_PKG_DROP_BIN" handy-bin >/dev/null 2>&1 || {
+          status=1
+          rollback_complete=false
+        }
+      elif command -v omarchy >/dev/null 2>&1; then
+        omarchy pkg drop handy-bin >/dev/null 2>&1 || {
+          status=1
+          rollback_complete=false
+        }
+      fi
     fi
     if [[ "$VOXTYPE_RECOVERY_ACTIVE" == true || "$VOXTYPE_REMOVED" == true ]]; then
       voxtype_restore || {
@@ -559,16 +566,9 @@ dictation_test() {
 }
 
 maybe_remove_voxtype() {
-  local version artifact recovery path relative enabled active
+  local recovery path relative enabled active
   pacman -Q voxtype-bin >/dev/null 2>&1 || return 0
   confirm_voxtype_removal || return 0
-
-  version="$(pacman -Q voxtype-bin | awk '{print $2}')"
-  artifact="$(find "${BLIZL_HANDY_PACKAGE_CACHE_DIR:-/var/cache/pacman/pkg}" -maxdepth 1 -type f -name "voxtype-bin-${version}-*.pkg.tar.*" -print -quit 2>/dev/null)"
-  if [[ -z "$artifact" ]]; then
-    say "Skipping live VoxType removal: no exact cached $version package is available for recovery."
-    return 0
-  fi
 
   recovery="$STATE_ROOT/voxtype-recovery/$(date -u +%Y%m%dT%H%M%SZ)"
   VOXTYPE_RECOVERY="$recovery"
@@ -588,27 +588,27 @@ maybe_remove_voxtype() {
       cp -a --reflink=auto -- "$path" "$recovery/files/$relative"
     fi
   done
-  cp -a -- "$artifact" "$recovery/"
   systemctl --user disable --now voxtype.service >/dev/null 2>&1 || true
   if [[ -n "${BLIZL_HANDY_VOXTYPE_REMOVE_BIN:-}" ]]; then
     "$BLIZL_HANDY_VOXTYPE_REMOVE_BIN" voxtype-bin
-  else
-    sudo pacman -R --noconfirm voxtype-bin
+  elif [[ -n "${BLIZL_HANDY_PKG_DROP_BIN:-}" ]]; then
+    "$BLIZL_HANDY_PKG_DROP_BIN" voxtype-bin
+  elif command -v omarchy >/dev/null 2>&1; then
+    omarchy pkg drop voxtype-bin
   fi
   VOXTYPE_REMOVED=true
   systemctl --user daemon-reload
 }
 
 voxtype_restore() {
-  local artifact path relative enabled active install_bin
+  local path relative enabled active
   [[ -n "$VOXTYPE_RECOVERY" && -d "$VOXTYPE_RECOVERY" ]] || return 1
-  artifact="$(find "$VOXTYPE_RECOVERY" -maxdepth 1 -type f -name 'voxtype-bin-*.pkg.tar.*' -print -quit)"
-  [[ -f "$artifact" ]] || return 1
-  install_bin="${BLIZL_HANDY_VOXTYPE_INSTALL_BIN:-}"
-  if [[ -n "$install_bin" ]]; then
-    "$install_bin" "$artifact"
-  else
-    sudo pacman -U --noconfirm "$artifact"
+  if [[ -n "${BLIZL_HANDY_VOXTYPE_INSTALL_BIN:-}" ]]; then
+    "$BLIZL_HANDY_VOXTYPE_INSTALL_BIN" voxtype-bin
+  elif [[ -n "${BLIZL_HANDY_PKG_ADD_BIN:-}" ]]; then
+    "$BLIZL_HANDY_PKG_ADD_BIN" voxtype-bin
+  elif command -v omarchy >/dev/null 2>&1; then
+    omarchy pkg add voxtype-bin
   fi
   while IFS= read -r path; do
     relative="${path#/}"

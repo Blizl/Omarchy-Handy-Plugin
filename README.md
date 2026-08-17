@@ -169,7 +169,7 @@ To manually remove Handy, all downloaded Whisper/Parakeet speech models, and all
 ~/.config/omarchy/plugins/blizl.handy/bin/uninstall && omarchy plugin remove blizl.handy
 
 # 2. Remove the Handy package
-sudo pacman -R --noconfirm handy-bin handy-bin-debug 2>/dev/null || true
+omarchy pkg drop handy-bin handy-bin-debug
 
 # 3. Remove Handy user settings, databases, and autostart files
 rm -rf ~/.local/share/com.pais.handy ~/.config/autostart/Handy.desktop
@@ -213,8 +213,7 @@ bin/e2e-checkpoint discard CHECKPOINT_ID
 `discard` is intentionally separate from restore. Keep the last checkpoint
 until dictation, the widget, a shell restart, and a new login have all worked.
 
-Live VoxType removal is skipped unless its exact installed package exists in
-the package cache. This is what makes exact restoration possible.
+Package removal and restoration use Omarchy's package manager (`omarchy pkg drop` / `omarchy pkg add`), preserving user configurations without local package archive manipulation.
 
 ## Development
 

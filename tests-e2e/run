@@ -25,7 +25,6 @@ trap 'exit 143' TERM
   exit 0
 }
 
-export BLIZL_HANDY_REQUIRE_PACKAGE_RECOVERY=true
 checkpoint_id="$($CHECKPOINT_TOOL create)"
 printf '\nRecovery checkpoint created: %s\n' "$checkpoint_id"
 printf 'To restore manually:\n%s restore %s\n\n' "$CHECKPOINT_TOOL" "$checkpoint_id"

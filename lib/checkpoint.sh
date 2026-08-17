@@ -76,27 +76,14 @@ checkpoint_hash_files() {
 }
 
 checkpoint_snapshot_commands() {
-  local directory="$1" hashes_file="$2" package version present artifact source enabled active handy_running quickshell_running packages='[]'
-  mkdir -p -- "$directory/packages"
+  local directory="$1" hashes_file="$2" package version present enabled active handy_running quickshell_running packages='[]'
   for package in handy-bin voxtype-bin wtype; do
     version=''
     present=false
-    artifact=''
     if command -v pacman >/dev/null 2>&1 && version="$(pacman -Q "$package" 2>/dev/null | awk '{print $2}')" && [[ -n "$version" ]]; then
       present=true
     fi
-    if [[ "$present" == true ]]; then
-      source="$(find "${BLIZL_HANDY_PACKAGE_CACHE_DIR:-/var/cache/pacman/pkg}" -maxdepth 1 -type f -name "$package-$version-*.pkg.tar.*" -print -quit 2>/dev/null || :)"
-      if [[ -n "$source" ]]; then
-        artifact="packages/$(basename "$source")"
-        cp -a --reflink=auto -- "$source" "$directory/$artifact"
-        checkpoint_hash_files "$directory/$artifact" "$hashes_file"
-      elif [[ "$package" == voxtype-bin && "${BLIZL_HANDY_REQUIRE_PACKAGE_RECOVERY:-false}" == true ]]; then
-        echo "No cached recovery artifact for $package $version" >&2
-        return 1
-      fi
-    fi
-    packages="$(jq --arg name "$package" --arg version "$version" --arg artifact "$artifact" --argjson present "$present" '. + [{name:$name,version:$version,present:$present,artifact:(if $artifact == "" then null else $artifact end)}]' <<<"$packages")"
+    packages="$(jq --arg name "$package" --arg version "$version" --argjson present "$present" '. + [{name:$name,version:$version,present:$present}]' <<<"$packages")"
   done
   printf '%s\n' "$packages" >"$directory/package-state.json"
 
@@ -182,19 +169,12 @@ checkpoint_hashes_verify() {
 }
 
 checkpoint_verify() {
-  local id="$1" directory path existed archive name
+  local id="$1" directory path existed archive
   directory="$(checkpoint_root)/$id"
   checkpoint_valid_id "$id" || return 1
   [[ -f "$directory/manifest.json" && -f "$directory/hashes.txt" ]] || return 1
   [[ -f "$directory/package-state.json" && -f "$directory/service-state.json" && -f "$directory/process-state.json" ]] || return 1
-  jq -e 'type == "array" and all(.[]; (.name|type) == "string" and (.present|type) == "boolean" and ((.artifact == null) or ((.artifact|type) == "string" and (.artifact|startswith("packages/")) and (.artifact|contains("..")|not))))' "$directory/package-state.json" >/dev/null || return 1
-  while IFS=$'\t' read -r name present artifact; do
-    if [[ "$present" == true && -n "$artifact" ]]; then
-      [[ -f "$directory/$artifact" ]] || return 1
-    elif [[ "$present" == true && "$name" == voxtype-bin && "${BLIZL_HANDY_REQUIRE_PACKAGE_RECOVERY:-false}" == true ]]; then
-      return 1
-    fi
-  done < <(jq -r '.[] | [.name, (.present|tostring), (.artifact // "")] | @tsv' "$directory/package-state.json")
+  jq -e 'type == "array" and all(.[]; (.name|type) == "string" and (.present|type) == "boolean")' "$directory/package-state.json" >/dev/null || return 1
   jq -e '(.unit == "voxtype.service") and (.enabled|type == "string") and (.active|type == "string")' "$directory/service-state.json" >/dev/null || return 1
   jq -e '(.handy|type == "boolean") and (.quickshell|type == "boolean")' "$directory/process-state.json" >/dev/null || return 1
   jq -e 'type == "array"' "$directory/manifest.json" >/dev/null || return 1
@@ -259,35 +239,37 @@ checkpoint_restore_service() {
 }
 
 checkpoint_restore_packages() {
-  local directory="$1" name expected_version expected_present artifact current_version install_bin remove_bin
+  local directory="$1" name expected_version expected_present current_version add_bin drop_bin
   [[ "${BLIZL_HANDY_SKIP_RUNTIME_RESTORE:-false}" == true ]] && return 0
   command -v pacman >/dev/null 2>&1 || {
     jq -e 'any(.[]; .present)' "$directory/package-state.json" >/dev/null && return 1
     return 0
   }
-  while IFS=$'\t' read -r name expected_version expected_present artifact; do
+  add_bin="${BLIZL_HANDY_PKG_ADD_BIN:-}"
+  drop_bin="${BLIZL_HANDY_PKG_DROP_BIN:-}"
+  while IFS=$'\t' read -r name expected_version expected_present; do
     current_version="$(pacman -Q "$name" 2>/dev/null | awk '{print $2}')" || current_version=''
     if [[ "$expected_present" == true ]]; then
       [[ "$current_version" == "$expected_version" ]] && continue
-      [[ -n "$artifact" && -f "$directory/$artifact" ]] || {
-        echo "No exact package artifact for $name $expected_version" >&2
-        return 1
-      }
-      install_bin="${BLIZL_HANDY_PACMAN_INSTALL_BIN:-}"
-      if [[ -n "$install_bin" ]]; then
-        "$install_bin" "$directory/$artifact"
+      if [[ -n "$add_bin" ]]; then
+        "$add_bin" "$name"
+      elif command -v omarchy >/dev/null 2>&1; then
+        omarchy pkg add "$name"
       else
-        sudo pacman -U --noconfirm "$directory/$artifact"
+        echo "Cannot restore package $name: omarchy command not found" >&2
+        return 1
       fi
     elif [[ -n "$current_version" ]]; then
-      remove_bin="${BLIZL_HANDY_PACMAN_REMOVE_BIN:-}"
-      if [[ -n "$remove_bin" ]]; then
-        "$remove_bin" "$name"
+      if [[ -n "$drop_bin" ]]; then
+        "$drop_bin" "$name"
+      elif command -v omarchy >/dev/null 2>&1; then
+        omarchy pkg drop "$name"
       else
-        sudo pacman -R --noconfirm "$name"
+        echo "Cannot drop package $name: omarchy command not found" >&2
+        return 1
       fi
     fi
-  done < <(jq -r '.[] | [.name, .version, (.present|tostring), (.artifact // "")] | @tsv' "$directory/package-state.json")
+  done < <(jq -r '.[] | [.name, (.version // ""), (.present|tostring)] | @tsv' "$directory/package-state.json")
 }
 
 checkpoint_restore_processes() {
@@ -390,19 +372,19 @@ checkpoint_verify_current_files() {
 }
 
 checkpoint_verify_current_runtime() {
-  local directory="$1" check_process="${2:-true}" name expected_version expected_present artifact current_version enabled active handy quickshell
+  local directory="$1" check_process="${2:-true}" name expected_version expected_present current_version enabled active handy quickshell
   [[ "${BLIZL_HANDY_SKIP_RUNTIME_RESTORE:-false}" == true ]] && return 0
   if jq -e 'any(.[]; .present)' "$directory/package-state.json" >/dev/null; then
     command -v pacman >/dev/null 2>&1 || return 1
   fi
-  while IFS=$'\t' read -r name expected_version expected_present artifact; do
+  while IFS=$'\t' read -r name expected_version expected_present; do
     current_version="$(pacman -Q "$name" 2>/dev/null | awk '{print $2}')" || current_version=''
     if [[ "$expected_present" == true ]]; then
       [[ "$current_version" == "$expected_version" ]] || return 1
     else
       [[ -z "$current_version" ]] || return 1
     fi
-  done < <(jq -r '.[] | [.name, .version, (.present|tostring), (.artifact // "")] | @tsv' "$directory/package-state.json")
+  done < <(jq -r '.[] | [.name, (.version // ""), (.present|tostring)] | @tsv' "$directory/package-state.json")
   command -v systemctl >/dev/null 2>&1 || return 1
   enabled="$(timeout 5s systemctl --user is-enabled voxtype.service 2>/dev/null || printf disabled)"
   active="$(timeout 5s systemctl --user is-active voxtype.service 2>/dev/null || printf inactive)"
