@@ -29,8 +29,8 @@ LUA
   # Test paths are resolved at runtime.
   # shellcheck disable=SC1091
   source "$ROOT/lib/bindings.sh"
-  bindings_write_managed "$file" "ALT + SPACE" "" "$ROOT/bin/handy-trigger"
-  bindings_write_managed "$file" "ALT + SPACE" "" "$ROOT/bin/handy-trigger"
+  bindings_write_managed "$file" "ALT + SPACE"
+  bindings_write_managed "$file" "ALT + SPACE"
   assert_eq "$(grep -F --count -- "$HANDY_BINDINGS_BEGIN" "$file")" 1
   assert_eq "$(grep -Fc 'hl.unbind("ALT + SPACE")' "$file")" 1
   assert_eq "$(grep -Fc 'native evdev hotkey (handy_keys)' "$file")" 1

@@ -111,8 +111,7 @@ bindings_write_managed() {
   local bindings_file="$1"
   local key="$2"
   local previous_action="${3:-}"
-  local trigger_path="${4:-}"
-  local voxtype_keys="${5:-$key}" managed_key selected_unbound=false temporary clean
+  local voxtype_keys="${4:-$key}" managed_key selected_unbound=false temporary clean
 
   [[ "$key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
     echo "Shortcut contains unsupported characters: $key" >&2

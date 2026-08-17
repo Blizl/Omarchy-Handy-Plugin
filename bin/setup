@@ -181,16 +181,32 @@ ensure_input_permissions() {
   fi
 
   if [[ "$in_input_group" != true ]]; then
-    say "Adding $current_user to the 'input' group for native push-to-talk key detection..."
-    if command -v sudo >/dev/null 2>&1; then
-      sudo usermod -aG input "$current_user" || true
+    if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true ]]; then
+      say "Handy requires Linux evdev input permissions to detect global push-to-talk key shortcuts."
+      if confirm "Add user '$current_user' to the 'input' group?" yes; then
+        if command -v sudo >/dev/null 2>&1; then
+          sudo usermod -aG input "$current_user" || true
+        fi
+      else
+        say "Skipping group update. Push-to-talk key detection may require manual evdev permissions."
+      fi
+    elif [[ "${BLIZL_HANDY_CONFIRM:-}" == yes ]]; then
+      if command -v sudo >/dev/null 2>&1; then
+        sudo usermod -aG input "$current_user" || true
+      fi
     fi
   fi
 
   if compgen -G "/dev/input/event*" >/dev/null 2>&1; then
     if ! test -r /dev/input/event0 2>/dev/null; then
       if command -v sudo >/dev/null 2>&1 && command -v setfacl >/dev/null 2>&1; then
-        sudo setfacl -m "u:${current_user}:r" /dev/input/event* 2>/dev/null || true
+        if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true ]]; then
+          if confirm "Grant current user read permissions to /dev/input/event* via setfacl for this session?" yes; then
+            sudo setfacl -m "u:${current_user}:r" /dev/input/event* 2>/dev/null || true
+          fi
+        elif [[ "${BLIZL_HANDY_CONFIRM:-}" == yes ]]; then
+          sudo setfacl -m "u:${current_user}:r" /dev/input/event* 2>/dev/null || true
+        fi
       fi
     fi
   fi
@@ -221,6 +237,10 @@ preflight() {
 install_handy() {
   if [[ "${BLIZL_HANDY_FORCE_INSTALL:-false}" != true ]] && command -v handy >/dev/null; then
     return 0
+  fi
+  if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true && "${BLIZL_HANDY_FORCE_INSTALL:-false}" != true ]]; then
+    say "Handy is not currently installed on your system."
+    confirm "Install handy-bin from the AUR?" yes || fail "Handy installation was cancelled"
   fi
   say "Installing handy-bin from the AUR…"
   if [[ -n "${BLIZL_HANDY_INSTALL_BIN:-}" ]]; then
@@ -340,8 +360,25 @@ confirm_voxtype_removal() {
   confirm "Handy passed. Remove VoxType?" no
 }
 
+confirm_configuration_plan() {
+  say ""
+  say "Configuration Summary:"
+  say "  • Hyprland: Unbind $SELECTED_SHORTCUT in $BINDINGS_FILE"
+  say "  • Handy: Set push-to-talk shortcut to $SELECTED_SHORTCUT in $SETTINGS_FILE"
+  say "  • Autostart: Ensure Handy launches hidden on login ($AUTOSTART_FILE)"
+  say "  • Omarchy Bar: Replace Dictation indicator with Handy widget in $SHELL_FILE"
+  if voxtype_is_available && [[ -f "$VOXTYPE_CONFIG" ]] && voxtype_hotkey_enabled "$VOXTYPE_CONFIG"; then
+    say "  • VoxType: Disable conflicting native push-to-talk hotkey in $VOXTYPE_CONFIG"
+  fi
+  say "  (All target files are snapshotted in an atomic transaction and fully restored on uninstall.)"
+  say ""
+  if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true ]]; then
+    confirm "Apply these configuration changes?" yes || fail "setup cancelled by user"
+  fi
+}
+
 configure_binding() {
-  local existing trigger_path voxtype_keys=''
+  local existing voxtype_keys=''
   existing="$(bindings_action_for_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT")"
   if [[ -z "$existing" ]] && voxtype_is_available; then
     existing="$(bindings_action_for_key "$VOXTYPE_BINDINGS_FILE" "$SELECTED_SHORTCUT")"
@@ -350,11 +387,10 @@ configure_binding() {
     say "$SELECTED_SHORTCUT is currently bound to: $existing"
     confirm "Replace that action?" no || fail "shortcut replacement declined"
   fi
-  trigger_path="$PLUGIN_ROOT/bin/handy-trigger"
   if voxtype_is_available; then
     voxtype_keys="$(bindings_detect_voxtype_keys "$BINDINGS_FILE" "$VOXTYPE_BINDINGS_FILE")"
   fi
-  bindings_write_managed "$BINDINGS_FILE" "$SELECTED_SHORTCUT" "$existing" "$trigger_path" "$voxtype_keys"
+  bindings_write_managed "$BINDINGS_FILE" "$SELECTED_SHORTCUT" "$existing" "$voxtype_keys"
 }
 
 configure_handy_binding() {
@@ -634,6 +670,7 @@ main() {
   select_shortcut
   explain_voxtype_replacement
   confirm_voxtype_conflict
+  confirm_configuration_plan
   configure_voxtype_hotkey
   configure_handy_binding
   configure_binding

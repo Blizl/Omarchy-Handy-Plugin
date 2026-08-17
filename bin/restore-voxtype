@@ -302,6 +302,9 @@ remove_handy() {
     "$HOME/.cache/huggingface/hub/models--handy-computer--parakeet-tdt-0.6b-v2-gguf" \
     "$HOME/.cache/huggingface/hub/models--handy-computer--parakeet-tdt-0.6b-v3-gguf" \
     "$HOME/.cache/huggingface/hub/models--handy-computer--parakeet-unified-en-0.6b-gguf"
+  if compgen -G "$HOME/.cache/huggingface/hub/models--handy-computer--*" >/dev/null 2>&1; then
+    rm -rf -- "$HOME/.cache/huggingface/hub"/models--handy-computer--*
+  fi
   rm -f -- \
     "$HOME/.config/autostart/Handy.desktop" \
     "$HOME/.local/bin/handy-status-follow" \

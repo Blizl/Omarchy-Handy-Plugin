@@ -40,7 +40,7 @@ make_fixture() {
   : >"$VOXTYPE_BINDINGS_FILE"
   export BLIZL_HANDY_NONINTERACTIVE=true BLIZL_HANDY_SHORTCUT='ALT + SPACE'
   export BLIZL_HANDY_DICTATION_TEST=passed BLIZL_HANDY_SKIP_RELOAD=true BLIZL_HANDY_CONFIRM=no
-  export BLIZL_HANDY_VOXTYPE_PRESENT=false
+  export BLIZL_HANDY_VOXTYPE_PRESENT=false BLIZL_HANDY_SKIP_INPUT_CHECK=true
   unset BLIZL_HANDY_PLUGIN_REMOVE_BIN BLIZL_HANDY_TEST_WINDOW_BIN
   unset BLIZL_HANDY_CONFIRM_CONFLICT BLIZL_HANDY_REMOVE_VOXTYPE
   unset HYPRLAND_INSTANCE_SIGNATURE
@@ -458,7 +458,7 @@ test_setup_runs_dictation_test_inline_in_terminal() {
     'exit 0' >"$WORK/bin/omarchy"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/uwsm-app"
   chmod +x "$WORK/bin/omarchy" "$WORK/bin/uwsm-app"
-  export BLIZL_HANDY_NONINTERACTIVE=false
+  export BLIZL_HANDY_NONINTERACTIVE=false BLIZL_HANDY_CONFIRM=yes BLIZL_HANDY_REMOVE_VOXTYPE=no
   unset BLIZL_HANDY_DICTATION_TEST BLIZL_HANDY_TEST_WINDOW_BIN
 
   printf '\ndictated words\n' | "$ROOT/bin/setup" >/dev/null
@@ -694,6 +694,46 @@ test_setup_failure_cleanup_terminates_orphan_watcher() {
   unset BLIZL_HANDY_RUNTIME_DIR
 }
 
+test_setup_interactive_consent_declined_aborts_without_mutation() {
+  make_fixture
+  local before_bindings before_settings before_autostart before_shell
+  before_bindings="$(<"$HYPR_BINDINGS_FILE")"
+  before_settings="$(<"$HANDY_SETTINGS_FILE")"
+  before_autostart="$(<"$HANDY_AUTOSTART_FILE")"
+  before_shell="$(<"$OMARCHY_SHELL_FILE")"
+
+  # Non-interactive mode false, but confirmation response is 'no'
+  export BLIZL_HANDY_NONINTERACTIVE=false
+  export BLIZL_HANDY_CONFIRM=no
+  export BLIZL_HANDY_SHORTCUT='ALT + SPACE'
+
+  if printf '\n' | "$ROOT/bin/setup" >/dev/null 2>&1; then
+    fail 'setup succeeded when configuration consent was declined'
+  fi
+
+  assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
+  assert_eq "$(<"$HANDY_SETTINGS_FILE")" "$before_settings"
+  assert_eq "$(<"$HANDY_AUTOSTART_FILE")" "$before_autostart"
+  assert_eq "$(<"$OMARCHY_SHELL_FILE")" "$before_shell"
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'declined setup committed install state'
+}
+
+test_setup_interactive_aur_install_declined_aborts() {
+  make_fixture
+  rm -f -- "$WORK/bin/handy"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$WORK/bin/yay"
+  chmod +x "$WORK/bin/yay"
+
+  export BLIZL_HANDY_NONINTERACTIVE=false
+  export BLIZL_HANDY_CONFIRM=no
+  export BLIZL_HANDY_INSTALL_BIN="$WORK/bin/yay"
+
+  if printf '\n' | "$ROOT/bin/setup" >/dev/null 2>&1; then
+    fail 'setup succeeded when AUR installation consent was declined'
+  fi
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'declined AUR install committed state'
+}
+
 test_setup_uninstall_round_trip
 test_setup_upgrades_a_v1_install_record
 test_setup_rejects_conflict_without_mutation
@@ -730,4 +770,6 @@ test_voxtype_removal_uses_explicit_package_command
 test_partial_voxtype_removal_restores_everything
 test_uninstall_cleans_up_running_watcher_and_runtime_files
 test_setup_failure_cleanup_terminates_orphan_watcher
+test_setup_interactive_consent_declined_aborts_without_mutation
+test_setup_interactive_aur_install_declined_aborts
 printf 'setup/uninstall tests: ok\n'

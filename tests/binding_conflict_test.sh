@@ -56,7 +56,7 @@ test_missing_voxtype_bindings_are_not_an_error() {
 test_managed_block_unbinds_even_without_previous_action() {
   local file="$WORK/no-previous.lua"
   printf '%s\n' 'o.bind("F9", "Open terminal", "kitty")' >"$file"
-  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
+  bindings_write_managed "$file" 'ALT + SPACE'
   assert_contains "$file" 'hl.unbind("ALT + SPACE")'
   assert_contains "$file" "Dictation push-to-talk is ALT + SPACE via Handy's native evdev hotkey (handy_keys)."
   assert_eq "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$file")" 1
@@ -74,13 +74,13 @@ test_previous_action_is_readable_and_write_is_idempotent() {
   local file="$WORK/idempotent.lua" first second
   printf '%s\n' 'o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")' >"$file"
   bindings_write_managed "$file" F9 \
-    'Start dictation (push-to-talk): voxtype record start' "$ROOT/bin/handy-trigger"
+    'Start dictation (push-to-talk): voxtype record start'
   assert_contains "$file" '-- Previous action: Start dictation (push-to-talk): voxtype record start'
   assert_contains "$file" "Dictation push-to-talk is F9 via Handy's native evdev hotkey (handy_keys)."
   assert_contains "$file" 'hl.unbind("F9")'
   first="$(<"$file")"
   bindings_write_managed "$file" F9 \
-    "$(bindings_action_for_key "$file" F9)" "$ROOT/bin/handy-trigger"
+    "$(bindings_action_for_key "$file" F9)"
   second="$(<"$file")"
   assert_eq "$second" "$first"
   assert_eq "$(grep -Fc -- 'hl.unbind("F9")' "$file")" 1
@@ -90,7 +90,7 @@ test_previous_action_is_readable_and_write_is_idempotent() {
 test_managed_block_unbinds_all_voxtype_keys() {
   local file="$WORK/all-unbinds.lua"
   printf '%s\n' 'o.bind("F9", "Start dictation", "voxtype record start")' >"$file"
-  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger" $'F9\nSUPER + CTRL + X'
+  bindings_write_managed "$file" 'ALT + SPACE' '' $'F9\nSUPER + CTRL + X'
   assert_eq "$(grep -Fc -- 'hl.unbind("F9")' "$file")" 1
   assert_eq "$(grep -Fc -- 'hl.unbind("SUPER + CTRL + X")' "$file")" 1
   assert_eq "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$file")" 1
@@ -99,7 +99,7 @@ test_managed_block_unbinds_all_voxtype_keys() {
 test_managed_block_rejects_malformed_detected_key() {
   local file="$WORK/malformed-key.lua"
   printf '%s\n' 'o.bind("F9", "Start", "voxtype record start")' >"$file"
-  if bindings_write_managed "$file" F9 '' "$ROOT/bin/handy-trigger" $'F9\nBAD"KEY'; then
+  if bindings_write_managed "$file" F9 '' $'F9\nBAD"KEY'; then
     fail 'malformed detected key was accepted'
   fi
   ! grep -Fq -- 'BEGIN blizl.handy managed bindings' "$file" ||
@@ -109,7 +109,7 @@ test_managed_block_rejects_malformed_detected_key() {
 test_managed_block_emits_native_unbindings_and_comments() {
   local file="$WORK/clean-bindings.lua"
   printf '%s\n' 'o.bind("F9", "Open terminal", "kitty")' >"$file"
-  bindings_write_managed "$file" 'ALT + SPACE' '' "$ROOT/bin/handy-trigger"
+  bindings_write_managed "$file" 'ALT + SPACE'
   assert_contains "$file" 'hl.unbind("ALT + SPACE")'
   assert_contains "$file" "Handy's native evdev hotkey (handy_keys)"
   ! grep -Fq -- 'o.bind(' <(grep -A 10 -- "$HANDY_BINDINGS_BEGIN" "$file") || fail 'unexpected o.bind in managed block'
@@ -121,7 +121,7 @@ test_managed_block_multi_modifier_and_clean_removal() {
   local file="$WORK/multi-mod.lua" clean="$WORK/multi-mod-clean.lua" original
   printf '%s\n' 'o.bind("SUPER + B", "Browser", "browser")' >"$file"
   original="$(<"$file")"
-  bindings_write_managed "$file" 'SUPER + CTRL + X' '' "$ROOT/bin/handy-trigger"
+  bindings_write_managed "$file" 'SUPER + CTRL + X'
   assert_contains "$file" 'hl.unbind("SUPER + CTRL + X")'
   assert_contains "$file" "Handy's native evdev hotkey (handy_keys)"
   bindings_validate "$file" || fail 'bindings validation failed on multi-modifier file'
