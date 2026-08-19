@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# blizl.handy no longer writes to bindings.lua. These markers and the block
+# remover exist only to recognise and clean up the managed block that versions
+# up to 1.1.0 inserted, so an upgrade or a reset still leaves the file tidy.
 HANDY_BINDINGS_BEGIN="-- BEGIN blizl.handy managed bindings"
 HANDY_BINDINGS_END="-- END blizl.handy managed bindings"
 
@@ -39,7 +42,7 @@ bindings_detect_voxtype_key() {
   local bindings_file candidate key score best_key='' best_score=0
 
   # Accept the user bindings first and an optional stock binding file second.
-  # A push-to-talk start action is more specific than a toggle action, so a
+  # A VoxType start action names a more specific key than a toggle action, so a
   # stock start binding still wins when the user file only contains a toggle.
   for bindings_file in "$@"; do
     [[ -f "$bindings_file" ]] || continue
@@ -107,45 +110,32 @@ bindings_action_for_key() {
   ' "$bindings_file"
 }
 
-bindings_write_managed() {
+# Print "<line number><TAB><source line>" for the first o.bind on KEY outside a
+# managed block. Used only to make the conflict message actionable, so a binding
+# split across lines simply yields nothing and the caller omits the location.
+bindings_locate_key() {
   local bindings_file="$1"
   local key="$2"
-  local previous_action="${3:-}"
-  local voxtype_keys="${4:-$key}" managed_key selected_unbound=false temporary clean
+  [[ -f "$bindings_file" ]] || return 1
+  BEGIN_MARKER="$HANDY_BINDINGS_BEGIN" END_MARKER="$HANDY_BINDINGS_END" KEY="$key" perl -ne '
+    if ($_ eq "$ENV{BEGIN_MARKER}\n") { $managed = 1; next }
+    if ($_ eq "$ENV{END_MARKER}\n") { $managed = 0; next }
+    next if $managed || /^\s*--/;
+    my $key = quotemeta($ENV{KEY});
+    if (/o\.bind\(\s*"$key"\s*,/i) { print "$.\t$_"; exit 0 }
+  ' "$bindings_file"
+}
 
-  [[ "$key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
-    echo "Shortcut contains unsupported characters: $key" >&2
-    return 1
-  }
-  while IFS= read -r managed_key; do
-    [[ -n "$managed_key" ]] || continue
-    [[ "$managed_key" =~ ^[A-Za-z0-9_+[:space:]-]+$ ]] || {
-      echo "Shortcut contains unsupported characters: $managed_key" >&2
-      return 1
-    }
-  done <<<"$voxtype_keys"
-
-  temporary="$(mktemp "${bindings_file}.tmp.XXXXXX")"
-  clean="$(mktemp "${bindings_file}.clean.XXXXXX")"
-  bindings_remove_managed_block "$bindings_file" "$clean"
-  cp -- "$clean" "$temporary"
-  rm -f -- "$clean"
-
-  {
-    printf '\n%s\n' "$HANDY_BINDINGS_BEGIN"
-    if [[ -n "$previous_action" ]]; then
-      printf '%s\n' "-- Previous action: ${previous_action//$'\n'/ }"
-    fi
-    printf '%s\n' "-- Dictation push-to-talk is $key via Handy's native evdev hotkey (handy_keys)."
-    while IFS= read -r managed_key; do
-      [[ -n "$managed_key" ]] || continue
-      [[ "$managed_key" == "$key" ]] && selected_unbound=true
-      printf 'hl.unbind("%s")\n' "$managed_key"
-    done <<<"$voxtype_keys"
-    [[ "$selected_unbound" == true ]] || printf 'hl.unbind("%s")\n' "$key"
-    printf '%s\n' "$HANDY_BINDINGS_END"
-  } >>"$temporary"
-
-  chmod --reference="$bindings_file" "$temporary" 2>/dev/null || chmod 644 "$temporary"
-  mv -- "$temporary" "$bindings_file"
+# Print every key bound with o.bind outside a managed block, one per line, in
+# the file's own spelling. Callers normalize before comparing, because Omarchy
+# accepts "ALT+ENTER" and "ALT + ENTER" for the same chord.
+bindings_all_keys() {
+  local bindings_file="$1"
+  [[ -f "$bindings_file" ]] || return 0
+  BEGIN_MARKER="$HANDY_BINDINGS_BEGIN" END_MARKER="$HANDY_BINDINGS_END" perl -ne '
+    if ($_ eq "$ENV{BEGIN_MARKER}\n") { $managed = 1; next }
+    if ($_ eq "$ENV{END_MARKER}\n") { $managed = 0; next }
+    next if $managed || /^\s*--/;
+    while (/o\.bind\(\s*"([^"]+)"/g) { print "$1\n" }
+  ' "$bindings_file"
 }

@@ -5,6 +5,11 @@ PLUGIN_ROOT="${BLIZL_HANDY_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}
 # Resolved from the plugin directory before it can remove its own checkout.
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/bindings.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/privilege.sh"
+
+privilege_require_non_root "${BASH_SOURCE[0]}" || exit 1
 
 STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
 INSTALL_FILE="$STATE_ROOT/install.json"
@@ -222,7 +227,9 @@ restore_stock_voxtype_bindings() {
   local temporary
   temporary="$(mktemp "${BINDINGS_FILE}.tmp.XXXXXX")"
   awk '
-    /^-- Dictation push-to-talk is/ {
+    # Matches the toggle comment written today and the push-to-talk comment
+    # written by older installs, so upgrades still clean up completely.
+    /^-- Dictation (push-to-talk|toggle) is/ {
       old_dictation_comment = 1
       next
     }

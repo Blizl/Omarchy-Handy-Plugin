@@ -8,6 +8,25 @@ checkpoint_root() {
   printf '%s/e2e-checkpoints\n' "$(checkpoint_state_root)"
 }
 
+# The only packages this plugin ever installs or removes. Checkpoint restore
+# iterates this hardcoded list instead of the names recorded in
+# package-state.json, so a tampered state file can never name a package that
+# reaches a privileged `omarchy pkg add` / `omarchy pkg drop`.
+CHECKPOINT_MANAGED_PACKAGES=(handy-bin voxtype-bin wtype)
+
+checkpoint_managed_packages_json() {
+  printf '%s\n' "${CHECKPOINT_MANAGED_PACKAGES[@]}" | jq -R . | jq -s 'sort'
+}
+
+# Read one field of a managed package from a checkpoint's package-state.json.
+# The name is supplied by the caller from CHECKPOINT_MANAGED_PACKAGES, never
+# read out of the file itself.
+checkpoint_package_field() {
+  local directory="$1" name="$2" filter="$3"
+  jq -r --arg name "$name" "map(select(.name == \$name))[0] | $filter" \
+    "$directory/package-state.json"
+}
+
 checkpoint_valid_id() {
   [[ "${1:-}" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]
 }
@@ -77,7 +96,7 @@ checkpoint_hash_files() {
 
 checkpoint_snapshot_commands() {
   local directory="$1" hashes_file="$2" package version present enabled active handy_running quickshell_running packages='[]'
-  for package in handy-bin voxtype-bin wtype; do
+  for package in "${CHECKPOINT_MANAGED_PACKAGES[@]}"; do
     version=''
     present=false
     if command -v pacman >/dev/null 2>&1 && version="$(pacman -Q "$package" 2>/dev/null | awk '{print $2}')" && [[ -n "$version" ]]; then
@@ -174,7 +193,11 @@ checkpoint_verify() {
   checkpoint_valid_id "$id" || return 1
   [[ -f "$directory/manifest.json" && -f "$directory/hashes.txt" ]] || return 1
   [[ -f "$directory/package-state.json" && -f "$directory/service-state.json" && -f "$directory/process-state.json" ]] || return 1
-  jq -e 'type == "array" and all(.[]; (.name|type) == "string" and (.present|type) == "boolean")' "$directory/package-state.json" >/dev/null || return 1
+  jq -e --argjson managed "$(checkpoint_managed_packages_json)" '
+    type == "array"
+    and all(.[]; (.name|type) == "string" and (.present|type) == "boolean" and ((.version // "")|type) == "string")
+    and ([.[].name] | sort) == $managed
+  ' "$directory/package-state.json" >/dev/null || return 1
   jq -e '(.unit == "voxtype.service") and (.enabled|type == "string") and (.active|type == "string")' "$directory/service-state.json" >/dev/null || return 1
   jq -e '(.handy|type == "boolean") and (.quickshell|type == "boolean")' "$directory/process-state.json" >/dev/null || return 1
   jq -e 'type == "array"' "$directory/manifest.json" >/dev/null || return 1
@@ -247,7 +270,13 @@ checkpoint_restore_packages() {
   }
   add_bin="${BLIZL_HANDY_PKG_ADD_BIN:-}"
   drop_bin="${BLIZL_HANDY_PKG_DROP_BIN:-}"
-  while IFS=$'\t' read -r name expected_version expected_present; do
+  # Names come from the hardcoded allowlist, never from package-state.json, so a
+  # same-user process cannot stage an arbitrary package install or removal by
+  # editing that file. Only the expected version and presence are read from it.
+  for name in "${CHECKPOINT_MANAGED_PACKAGES[@]}"; do
+    expected_version="$(checkpoint_package_field "$directory" "$name" '.version // ""')" || return 1
+    expected_present="$(checkpoint_package_field "$directory" "$name" '.present | tostring')" || return 1
+    [[ "$expected_present" == true || "$expected_present" == false ]] || return 1
     current_version="$(pacman -Q "$name" 2>/dev/null | awk '{print $2}')" || current_version=''
     if [[ "$expected_present" == true ]]; then
       [[ "$current_version" == "$expected_version" ]] && continue
@@ -269,7 +298,7 @@ checkpoint_restore_packages() {
         return 1
       fi
     fi
-  done < <(jq -r '.[] | [.name, (.version // ""), (.present|tostring)] | @tsv' "$directory/package-state.json")
+  done
 }
 
 checkpoint_restore_processes() {
@@ -377,14 +406,17 @@ checkpoint_verify_current_runtime() {
   if jq -e 'any(.[]; .present)' "$directory/package-state.json" >/dev/null; then
     command -v pacman >/dev/null 2>&1 || return 1
   fi
-  while IFS=$'\t' read -r name expected_version expected_present; do
+  for name in "${CHECKPOINT_MANAGED_PACKAGES[@]}"; do
+    expected_version="$(checkpoint_package_field "$directory" "$name" '.version // ""')" || return 1
+    expected_present="$(checkpoint_package_field "$directory" "$name" '.present | tostring')" || return 1
+    [[ "$expected_present" == true || "$expected_present" == false ]] || return 1
     current_version="$(pacman -Q "$name" 2>/dev/null | awk '{print $2}')" || current_version=''
     if [[ "$expected_present" == true ]]; then
       [[ "$current_version" == "$expected_version" ]] || return 1
     else
       [[ -z "$current_version" ]] || return 1
     fi
-  done < <(jq -r '.[] | [.name, (.version // ""), (.present|tostring)] | @tsv' "$directory/package-state.json")
+  done
   command -v systemctl >/dev/null 2>&1 || return 1
   enabled="$(timeout 5s systemctl --user is-enabled voxtype.service 2>/dev/null || printf disabled)"
   active="$(timeout 5s systemctl --user is-active voxtype.service 2>/dev/null || printf inactive)"

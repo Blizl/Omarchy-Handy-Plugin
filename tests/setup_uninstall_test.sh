@@ -59,10 +59,9 @@ test_setup_uninstall_round_trip() {
   [[ "$(jq -r '.handyBinding' "$BLIZL_HANDY_STATE_DIR/install.json")" == 'alt+space' ]] || fail 'handyBinding not recorded in install.json'
   [[ "$(jq -r '.settings.bindings.transcribe.current_binding' "$HANDY_SETTINGS_FILE")" == 'alt+space' ]] || fail 'Handy shortcut was not set'
   [[ "$(jq -r '.settings.keyboard_implementation' "$HANDY_SETTINGS_FILE")" == 'handy_keys' ]] || fail 'handy_keys implementation not set'
-  [[ "$(jq -r '.settings.push_to_talk' "$HANDY_SETTINGS_FILE")" == 'true' ]] || fail 'push_to_talk not set to true'
-  [[ "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$HYPR_BINDINGS_FILE")" == 1 ]] || fail 'managed block missing'
-  [[ "$(grep -Fc -- 'hl.unbind("ALT + SPACE")' "$HYPR_BINDINGS_FILE")" == 1 ]] || fail 'ALT + SPACE not unbound in Hyprland'
-  ! grep -Fq 'release = true' "$HYPR_BINDINGS_FILE" || fail 'found broken release = true binding in Hyprland'
+  [[ "$(jq -r '.settings.push_to_talk' "$HANDY_SETTINGS_FILE")" == 'false' ]] || fail 'push_to_talk not set to false (toggle mode)'
+  assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
+  ! grep -Fq 'BEGIN blizl.handy' "$HYPR_BINDINGS_FILE" || fail 'setup wrote a managed block'
   [[ "$(grep -Fc -- 'Exec=handy --start-hidden' "$HANDY_AUTOSTART_FILE")" == 1 ]] || fail 'autostart changed incorrectly'
   [[ "$(jq '[.bar.layout[][] | select(.id == "blizl.handy")] | length' "$OMARCHY_SHELL_FILE")" == 1 ]] || fail 'Handy widget was not installed in shell settings'
   ! jq -e '[.bar.layout[][] | select(.id == "omarchy.indicators") | (.items // [])[]] | any(. == "Dictation")' "$OMARCHY_SHELL_FILE" >/dev/null || fail 'built-in Dictation indicator remained'
@@ -86,8 +85,8 @@ test_setup_upgrades_a_v1_install_record() {
 
   [[ "$(jq -r '.version' "$BLIZL_HANDY_STATE_DIR/install.json")" == 2 ]] ||
     fail 'v1 setup record was not upgraded'
-  [[ "$(grep -Fc -- 'BEGIN blizl.handy managed bindings' "$HYPR_BINDINGS_FILE")" == 1 ]] ||
-    fail 'upgrade duplicated the managed binding block'
+  ! grep -Fq -- 'BEGIN blizl.handy managed bindings' "$HYPR_BINDINGS_FILE" ||
+    fail 'upgrade left a managed binding block behind'
   [[ "$(jq '[.bar.layout[][] | select(.id == "blizl.handy")] | length' "$OMARCHY_SHELL_FILE")" == 1 ]] ||
     fail 'upgrade did not install the Handy center widget'
   "$ROOT/bin/uninstall" >/dev/null
@@ -289,8 +288,12 @@ test_setup_rejects_retained_voxtype_key_conflict_without_mutation() {
   status=$?
   set -e
   ((status != 0)) || fail 'retained VoxType key conflict was accepted silently'
-  [[ "$output" == *'VoxType push-to-talk conflict'* ]] ||
+  [[ "$output" == *'already bound in your Hyprland configuration'* ]] ||
     fail "conflict warning was not clear: $output"
+  [[ "$output" == *'VoxType push-to-talk'* ]] ||
+    fail "the conflicting binding was not shown: $output"
+  [[ "$output" == *'Remove or change that line'* ]] ||
+    fail "the fix instruction was not shown: $output"
   assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
   assert_eq "$(<"$HANDY_SETTINGS_FILE")" "$before_settings"
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] ||
@@ -314,8 +317,12 @@ test_setup_detects_voxtype_after_another_action_on_same_key() {
   set -e
 
   ((status != 0)) || fail 'VoxType conflict after another same-key action was accepted'
-  [[ "$output" == *'VoxType push-to-talk conflict on ALT+ENTER'* ]] ||
-    fail "same-key VoxType conflict was not reported: $output"
+  [[ "$output" == *'already bound in your Hyprland configuration'* ]] ||
+    fail "same-key conflict was not reported: $output"
+  [[ "$output" == *"$HYPR_BINDINGS_FILE:1"* ]] ||
+    fail "the conflicting line was not located: $output"
+  [[ "$output" == *'Keep this action'* ]] ||
+    fail "the conflicting binding was not shown: $output"
 }
 
 test_setup_rejects_native_voxtype_alt_enter_conflict_without_mutation() {
@@ -336,7 +343,7 @@ test_setup_rejects_native_voxtype_alt_enter_conflict_without_mutation() {
   status=$?
   set -e
   ((status != 0)) || fail 'native VoxType Alt+Enter conflict was accepted silently'
-  [[ "$output" == *'VoxType push-to-talk conflict on ALT + ENTER'* ]] ||
+  [[ "$output" == *'VoxType dictation conflict on ALT + ENTER'* ]] ||
     fail "native conflict warning was not clear: $output"
   assert_eq "$(<"$VOXTYPE_CONFIG_FILE")" "$before_config"
   [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] ||
@@ -369,9 +376,11 @@ test_setup_disables_native_voxtype_before_handy_test() {
     fail "setup did not explain retained VoxType ownership: $output"
   [[ "$output" == *'Handy will replace VoxType as Omarchy'\''s dictation engine'* ]] ||
     fail "setup did not explain the complete VoxType replacement: $output"
-  [[ "$output" == *'before the Handy test runs'* ]] ||
-    fail "setup did not explain when VoxType controls are disabled: $output"
-  [[ "$output" == *'Now test Handy push-to-talk'* ]] ||
+  [[ "$output" == *"disables VoxType's own hotkey"* ]] ||
+    fail "setup did not explain which VoxType control it disables: $output"
+  [[ "$output" == *'does not edit your Hyprland bindings'* ]] ||
+    fail "setup did not promise to leave Hyprland bindings alone: $output"
+  [[ "$output" == *'Now test Handy dictation: press'* ]] ||
     fail "setup did not identify the Handy test: $output"
   assert_file "$BLIZL_HANDY_STATE_DIR/install.json"
   "$ROOT/bin/uninstall" >/dev/null
@@ -416,15 +425,21 @@ test_setup_unbinds_stock_voxtype_before_claiming_its_key() {
   chmod +x "$WORK/bin/pacman"
   export BLIZL_HANDY_SHORTCUT=F9
   export BLIZL_HANDY_CONFIRM_CONFLICT=yes
+  local output status=0 before_bindings
+  before_bindings="$(<"$HYPR_BINDINGS_FILE")"
 
-  "$ROOT/bin/setup" >/dev/null
+  set +e
+  output="$("$ROOT/bin/setup" 2>&1)"
+  status=$?
+  set -e
 
-  assert_eq "$(grep -Fc -- 'hl.unbind("F9")' "$HYPR_BINDINGS_FILE")" 1
-  grep -Fq -- 'hl.unbind("SUPER + CTRL + X")' "$HYPR_BINDINGS_FILE" ||
-    fail 'stock VoxType toggle ownership was not neutralized'
-  grep -Fq -- '-- Previous action: Start dictation (push-to-talk): voxtype record start' \
-    "$HYPR_BINDINGS_FILE" || fail 'stock VoxType ownership was not recorded'
-  "$ROOT/bin/uninstall" >/dev/null
+  ((status != 0)) || fail 'a stock VoxType binding on the chosen key was accepted'
+  [[ "$output" == *"bound by Omarchy's stock VoxType bindings"* ]] ||
+    fail "the stock conflict was not reported: $output"
+  [[ "$output" == *'hl.unbind("F9")'* ]] ||
+    fail "the override to add was not shown: $output"
+  assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
+  [[ ! -e "$BLIZL_HANDY_STATE_DIR/install.json" ]] || fail 'refused setup committed state'
 }
 
 test_non_overlapping_voxtype_shortcut_needs_no_conflict_confirmation() {
@@ -438,12 +453,18 @@ test_non_overlapping_voxtype_shortcut_needs_no_conflict_confirmation() {
     'o.bind("SUPER + CTRL + X", "Toggle dictation", "voxtype record toggle")' \
     >"$VOXTYPE_BINDINGS_FILE"
 
+  local before_bindings
+  before_bindings="$(<"$HYPR_BINDINGS_FILE")"
+
   output="$("$ROOT/bin/setup" 2>&1)"
 
-  [[ "$output" != *'VoxType push-to-talk conflict'* ]] ||
+  [[ "$output" != *'dictation conflict'* ]] ||
     fail "non-overlapping VoxType shortcut produced a conflict warning: $output"
-  grep -Fq -- 'hl.unbind("F9")' "$HYPR_BINDINGS_FILE" ||
-    fail 'non-overlapping VoxType push-to-talk was not neutralized'
+  assert_eq "$(<"$HYPR_BINDINGS_FILE")" "$before_bindings"
+  [[ "$output" == *'still start VoxType'* ]] ||
+    fail "the untouched VoxType bindings were not reported: $output"
+  [[ "$output" == *'F9'* && "$output" == *'SUPER + CTRL + X'* ]] ||
+    fail "the untouched VoxType bindings were not listed: $output"
   "$ROOT/bin/uninstall" >/dev/null
 }
 

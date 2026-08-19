@@ -29,7 +29,11 @@ handy_settings_keyboard_implementation() {
 
 handy_settings_push_to_talk() {
   local settings_file="${1:-$(handy_settings_file)}"
-  jq -r '.settings.push_to_talk // empty' "$settings_file"
+  # `// empty` would swallow a legitimate `false`, which is exactly the value
+  # toggle mode stores, so test for the key instead of its truthiness.
+  jq -r 'if (.settings | type) == "object" and (.settings | has("push_to_talk"))
+         then (.settings.push_to_talk | tostring)
+         else empty end' "$settings_file"
 }
 
 handy_settings_set_shortcut() {
@@ -61,7 +65,7 @@ handy_settings_set_shortcut() {
   local temporary
   temporary="$(mktemp "${settings_file}.tmp.XXXXXX")"
   if ! jq --arg binding "$normalized" '
-    .settings.push_to_talk = true |
+    .settings.push_to_talk = false |
     .settings.keyboard_implementation = "handy_keys" |
     .settings.bindings.transcribe.current_binding = $binding
   ' "$settings_file" >"$temporary"; then

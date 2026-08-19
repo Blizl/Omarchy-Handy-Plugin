@@ -63,7 +63,7 @@ main() {
   printf 'This window tests Handy with the selected shortcut: %s.\n' "$shortcut_label"
   printf 'Setup disabled any conflicting VoxType shortcut before opening this window.\n'
   printf 'Keep this test window focused.\n'
-  printf 'Hold %s, speak one sentence, then release it.\n' "$shortcut_label"
+  printf 'Press %s, speak one sentence, then press it again to stop.\n' "$shortcut_label"
   printf 'The dictated text should appear below. Press Enter when complete.\n\n'
   printf '%s\n' '----------------------------------------------------------------------'
   printf 'Dictated text: '

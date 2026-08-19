@@ -17,6 +17,11 @@ source "$PLUGIN_ROOT/lib/voxtype-settings.sh"
 # Resolved from the installed plugin directory.
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/shell-settings.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/privilege.sh"
+
+privilege_require_non_root "${BASH_SOURCE[0]}" || exit 1
 
 STATE_ROOT="${BLIZL_HANDY_STATE_DIR:-$HOME/.local/state/blizl.handy}"
 BINDINGS_FILE="${HYPR_BINDINGS_FILE:-$HOME/.config/hypr/bindings.lua}"
@@ -179,7 +184,18 @@ trap 'exit 143' TERM
 
 ensure_input_permissions() {
   [[ "${BLIZL_HANDY_SKIP_INPUT_CHECK:-false}" == true ]] && return 0
-  local current_user="${USER:-$(id -un)}"
+  # Identify the account from the kernel, never from $USER. Both values below
+  # are interpolated into privileged sudo commands, and `setfacl -m` parses
+  # commas as additional ACL entries, so an attacker-controlled name could
+  # append an entry such as `o::rw` and hand every local account read/write
+  # access to all input devices. $USER is ordinary environment state that any
+  # same-user process can poison; `id` reports the real credentials.
+  local current_user current_uid
+  current_user="$(id -un)" || fail "could not determine the current user name"
+  current_uid="$(id -u)" || fail "could not determine the current user id"
+  [[ "$current_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*\$?$ ]] ||
+    fail "unsupported characters in the current user name: $current_user"
+  [[ "$current_uid" =~ ^[0-9]+$ ]] || fail "unsupported current user id: $current_uid"
   local in_input_group=false
   if groups "$current_user" 2>/dev/null | grep -qw "input"; then
     in_input_group=true
@@ -189,17 +205,17 @@ ensure_input_permissions() {
 
   if [[ "$in_input_group" != true ]]; then
     if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true ]]; then
-      say "Handy requires Linux evdev input permissions to detect global push-to-talk key shortcuts."
+      say "Handy requires Linux evdev input permissions to detect the global dictation shortcut."
       if confirm "Add user '$current_user' to the 'input' group?" yes; then
         if command -v sudo >/dev/null 2>&1; then
-          sudo usermod -aG input "$current_user" || true
+          sudo usermod -aG input -- "$current_user" || true
         fi
       else
-        say "Skipping group update. Push-to-talk key detection may require manual evdev permissions."
+        say "Skipping group update. Shortcut detection may require manual evdev permissions."
       fi
     elif [[ "${BLIZL_HANDY_CONFIRM:-}" == yes ]]; then
       if command -v sudo >/dev/null 2>&1; then
-        sudo usermod -aG input "$current_user" || true
+        sudo usermod -aG input -- "$current_user" || true
       fi
     fi
   fi
@@ -209,10 +225,10 @@ ensure_input_permissions() {
       if command -v sudo >/dev/null 2>&1 && command -v setfacl >/dev/null 2>&1; then
         if [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" != true ]]; then
           if confirm "Grant current user read permissions to /dev/input/event* via setfacl for this session?" yes; then
-            sudo setfacl -m "u:${current_user}:r" /dev/input/event* 2>/dev/null || true
+            sudo setfacl -m "u:${current_uid}:r" /dev/input/event* 2>/dev/null || true
           fi
         elif [[ "${BLIZL_HANDY_CONFIRM:-}" == yes ]]; then
-          sudo setfacl -m "u:${current_user}:r" /dev/input/event* 2>/dev/null || true
+          sudo setfacl -m "u:${current_uid}:r" /dev/input/event* 2>/dev/null || true
         fi
       fi
     fi
@@ -283,7 +299,7 @@ select_shortcut() {
   fi
   [[ -t 0 ]] || fail "set BLIZL_HANDY_SHORTCUT for non-interactive setup"
 
-  say "Choose the push-to-talk shortcut:"
+  say "Choose the dictation toggle shortcut:"
   if [[ -n "$voxtype_key" ]]; then
     say "  1. Reuse detected VoxType shortcut ($voxtype_key)"
   else
@@ -306,22 +322,13 @@ select_shortcut() {
   esac
 }
 
-voxtype_binding_owns_key() {
-  local bindings_file="$1" key="$2" detected_key
-  while IFS= read -r detected_key; do
-    voxtype_shortcuts_equal "$detected_key" "$key" && return 0
-  done < <(bindings_detect_voxtype_keys "$bindings_file")
-  return 1
-}
-
+# Only VoxType's own evdev hotkey, which lives in its TOML config and which
+# setup can still turn off. A conflicting Hyprland binding is not something this
+# plugin resolves any more; require_no_binding_conflict reports it instead.
 voxtype_conflict_present() {
   local native_shortcut=''
 
   voxtype_is_available || return 1
-  if voxtype_binding_owns_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT" ||
-    voxtype_binding_owns_key "$VOXTYPE_BINDINGS_FILE" "$SELECTED_SHORTCUT"; then
-    return 0
-  fi
   if [[ -f "$VOXTYPE_CONFIG" ]] && voxtype_hotkey_enabled "$VOXTYPE_CONFIG"; then
     if ! native_shortcut="$(voxtype_hotkey_shortcut "$VOXTYPE_CONFIG" 2>/dev/null)"; then
       fail "VoxType's native hotkey configuration is malformed"
@@ -337,25 +344,25 @@ explain_voxtype_replacement() {
   voxtype_is_available || return 0
 
   say "Handy will replace VoxType as Omarchy's dictation engine while this plugin is installed."
-  say "Setup will disable any VoxType hotkeys, bindings, and the center Dictation indicator before the Handy test runs."
+  say "Setup disables VoxType's own hotkey and replaces the center Dictation indicator; it does not edit your Hyprland bindings."
   say "VoxType stays installed unless you remove it later; uninstall restores its previous controls."
 }
 
 confirm_voxtype_conflict() {
   voxtype_conflict_present || return 0
 
-  say "Warning: VoxType push-to-talk conflict on $SELECTED_SHORTCUT."
-  say "Keeping VoxType and Handy on the same push-to-talk key can leave transcription running when the key is released."
+  say "Warning: VoxType dictation conflict on $SELECTED_SHORTCUT."
+  say "Keeping VoxType and Handy on the same key makes one shortcut drive two engines, so a single press can start both transcribers."
   if [[ -n "${BLIZL_HANDY_CONFIRM_CONFLICT:-}" ]]; then
     [[ "$BLIZL_HANDY_CONFIRM_CONFLICT" == yes ]] ||
-      fail "VoxType push-to-talk conflict was not confirmed"
+      fail "VoxType dictation conflict was not confirmed"
   elif [[ "${BLIZL_HANDY_NONINTERACTIVE:-false}" == true ]]; then
-    fail "VoxType push-to-talk conflict on $SELECTED_SHORTCUT; choose another shortcut or explicitly confirm Handy's takeover"
+    fail "VoxType dictation conflict on $SELECTED_SHORTCUT; choose another shortcut or explicitly confirm Handy's takeover"
   else
     confirm "Let Handy take over $SELECTED_SHORTCUT and disable VoxType's matching hotkey?" no ||
-      fail "VoxType push-to-talk conflict was not confirmed"
+      fail "VoxType dictation conflict was not confirmed"
   fi
-  say "VoxType will be kept installed. Handy will own $SELECTED_SHORTCUT; all detected VoxType push-to-talk/toggle bindings are disabled now and restored on uninstall."
+  say "VoxType stays installed with its own hotkey disabled; uninstall restores it."
 }
 
 confirm_voxtype_removal() {
@@ -370,12 +377,12 @@ confirm_voxtype_removal() {
 confirm_configuration_plan() {
   say ""
   say "Configuration Summary:"
-  say "  • Hyprland: Unbind $SELECTED_SHORTCUT in $BINDINGS_FILE"
-  say "  • Handy: Set push-to-talk shortcut to $SELECTED_SHORTCUT in $SETTINGS_FILE"
+  say "  • Hyprland: No change; $BINDINGS_FILE is never modified"
+  say "  • Handy: Set dictation toggle shortcut to $SELECTED_SHORTCUT in $SETTINGS_FILE"
   say "  • Autostart: Ensure Handy launches hidden on login ($AUTOSTART_FILE)"
   say "  • Omarchy Bar: Replace Dictation indicator with Handy widget in $SHELL_FILE"
   if voxtype_is_available && [[ -f "$VOXTYPE_CONFIG" ]] && voxtype_hotkey_enabled "$VOXTYPE_CONFIG"; then
-    say "  • VoxType: Disable conflicting native push-to-talk hotkey in $VOXTYPE_CONFIG"
+    say "  • VoxType: Disable conflicting native dictation hotkey in $VOXTYPE_CONFIG"
   fi
   say "  (All target files are snapshotted in an atomic transaction and fully restored on uninstall.)"
   say ""
@@ -384,20 +391,84 @@ confirm_configuration_plan() {
   fi
 }
 
-configure_binding() {
-  local existing voxtype_keys=''
-  existing="$(bindings_action_for_key "$BINDINGS_FILE" "$SELECTED_SHORTCUT")"
-  if [[ -z "$existing" ]] && voxtype_is_available; then
-    existing="$(bindings_action_for_key "$VOXTYPE_BINDINGS_FILE" "$SELECTED_SHORTCUT")"
+# blizl.handy never edits bindings.lua. Handy reads the chord straight from
+# /dev/input/event*, so a compositor binding on the same chord is not shadowed:
+# both actions fire on one press. Report the exact line and stop, rather than
+# rewriting a file that Hyprland executes as Lua.
+show_conflicting_binding() {
+  local bindings_file="$1" key="$2" located line text
+
+  located="$(bindings_locate_key "$bindings_file" "$key" || true)"
+  if [[ -n "$located" ]]; then
+    line="${located%%$'\t'*}"
+    text="${located#*$'\t'}"
+    say "  $bindings_file:$line"
+    say "      ${text#"${text%%[![:space:]]*}"}"
+  else
+    say "  $bindings_file"
   fi
-  if [[ -n "$existing" && "$existing" != *[Vv]ox[Tt]ype* ]]; then
-    say "$SELECTED_SHORTCUT is currently bound to: $existing"
-    confirm "Replace that action?" no || fail "shortcut replacement declined"
+}
+
+# Return the file's own spelling of any bound key that means the same chord as
+# the selected shortcut. Comparing literally would miss "ALT+ENTER" when the
+# file says "ALT + ENTER", and a missed conflict is a silent double-trigger.
+conflicting_bound_key() {
+  local bindings_file="$1" candidate
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if voxtype_shortcuts_equal "$candidate" "$SELECTED_SHORTCUT"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(bindings_all_keys "$bindings_file")
+  return 1
+}
+
+require_no_binding_conflict() {
+  local existing bound_key
+
+  if bound_key="$(conflicting_bound_key "$BINDINGS_FILE")"; then
+    existing="$(bindings_action_for_key "$BINDINGS_FILE" "$bound_key")"
+    say ""
+    say "$SELECTED_SHORTCUT is already bound in your Hyprland configuration:"
+    show_conflicting_binding "$BINDINGS_FILE" "$bound_key"
+    [[ -n "$existing" ]] && say "      action: $existing"
+    say ""
+    say "Handy reads the shortcut directly from the kernel, so that binding would"
+    say "still fire alongside Handy and one press would trigger both actions."
+    say "Remove or change that line, then run setup again."
+    fail "$SELECTED_SHORTCUT is already bound in $BINDINGS_FILE"
   fi
-  if voxtype_is_available; then
-    voxtype_keys="$(bindings_detect_voxtype_keys "$BINDINGS_FILE" "$VOXTYPE_BINDINGS_FILE")"
-  fi
-  bindings_write_managed "$BINDINGS_FILE" "$SELECTED_SHORTCUT" "$existing" "$voxtype_keys"
+
+  voxtype_is_available || return 0
+  bound_key="$(conflicting_bound_key "$VOXTYPE_BINDINGS_FILE")" || return 0
+  say ""
+  say "$SELECTED_SHORTCUT is bound by Omarchy's stock VoxType bindings:"
+  show_conflicting_binding "$VOXTYPE_BINDINGS_FILE" "$bound_key"
+  say ""
+  say "That file belongs to Omarchy, so override it from your own configuration by"
+  say "adding this line to $BINDINGS_FILE, then run setup again:"
+  say ""
+  say "  hl.unbind(\"$SELECTED_SHORTCUT\")"
+  fail "$SELECTED_SHORTCUT is bound by Omarchy's stock VoxType bindings"
+}
+
+# Bindings on other keys are not a conflict with Handy, but they do keep VoxType
+# reachable, so name them instead of silently unbinding them as v1 did.
+warn_other_voxtype_bindings() {
+  local key found=false
+  voxtype_is_available || return 0
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    voxtype_shortcuts_equal "$key" "$SELECTED_SHORTCUT" && continue
+    if [[ "$found" != true ]]; then
+      say ""
+      say "These Hyprland bindings still start VoxType. Handy does not touch them;"
+      say "remove them yourself if you want Handy to be the only dictation engine:"
+      found=true
+    fi
+    say "  $key"
+  done < <(bindings_detect_voxtype_keys "$BINDINGS_FILE" "$VOXTYPE_BINDINGS_FILE")
 }
 
 configure_handy_binding() {
@@ -413,11 +484,13 @@ configure_handy_binding() {
   local expected_binding
   expected_binding="$(handy_shortcut_normalize "$SELECTED_SHORTCUT")"
   [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$expected_binding" ]] ||
-    fail "Handy did not retain the push-to-talk shortcut ($expected_binding)"
+    fail "Handy did not retain the dictation shortcut ($expected_binding)"
   [[ "$(handy_settings_keyboard_implementation "$SETTINGS_FILE")" == "handy_keys" ]] ||
     fail "Handy did not configure native handy_keys keyboard implementation"
-  [[ "$(handy_settings_push_to_talk "$SETTINGS_FILE")" == "true" ]] ||
-    fail "Handy did not enable push-to-talk mode"
+  # Toggle mode: one press starts recording, the next press stops it. Handy
+  # spells that as push_to_talk = false.
+  [[ "$(handy_settings_push_to_talk "$SETTINGS_FILE")" == "false" ]] ||
+    fail "Handy did not enable toggle mode"
 }
 
 configure_voxtype_hotkey() {
@@ -429,7 +502,7 @@ configure_voxtype_hotkey() {
   case "$disable_status" in
     "$VOXTYPE_SETTINGS_CHANGED")
       VOXTYPE_HOTKEY_DISABLED=true
-      say "Keeping VoxType installed, but disabling its native push-to-talk for Handy. Uninstall restores VoxType's original hotkey."
+      say "Keeping VoxType installed, but disabling its native hotkey for Handy. Uninstall restores VoxType's original hotkey."
       if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active voxtype.service >/dev/null 2>&1; then
         VOXTYPE_WAS_ACTIVE=true
         systemctl --user restart voxtype.service >/dev/null
@@ -458,7 +531,7 @@ configure_autostart() {
 Type=Application
 Version=1.0
 Name=Handy
-Comment=Start Handy hidden for push-to-talk dictation
+Comment=Start Handy hidden for toggle dictation
 Exec=handy --start-hidden
 StartupNotify=false
 Terminal=false
@@ -529,7 +602,7 @@ run_dictation_test_window() {
   pid_file="$test_directory/helper.pid"
   TEST_WINDOW_PID_FILE="$pid_file"
 
-  say "Testing Handy push-to-talk in this terminal."
+  say "Testing the Handy dictation toggle in this terminal."
   local test_bin="${BLIZL_HANDY_TEST_WINDOW_BIN:-$PLUGIN_ROOT/bin/handy-test-window}"
   launch_status=0
   BLIZL_HANDY_TEST_PID_FILE="$pid_file" \
@@ -561,7 +634,7 @@ dictation_test() {
     fail "a dictation test is required before setup can commit"
   fi
   DICTATION_TEST_STARTED=true
-  say "Now test Handy push-to-talk by holding $SELECTED_SHORTCUT and speaking one sentence."
+  say "Now test Handy dictation: press $SELECTED_SHORTCUT, speak one sentence, then press it again to stop."
   run_dictation_test_window || fail "dictation test did not produce text"
 }
 
@@ -657,7 +730,8 @@ main() {
 
   transaction_begin "$STATE_ROOT"
   CREATED_TRANSACTION=true
-  transaction_backup "$BINDINGS_FILE"
+  # bindings.lua is deliberately absent: setup never writes it, so restoring a
+  # snapshot on uninstall would only clobber edits made in the meantime.
   transaction_backup "$SETTINGS_FILE"
   transaction_backup "$AUTOSTART_FILE"
   transaction_backup "$SHELL_FILE"
@@ -668,19 +742,20 @@ main() {
   launch_onboarding
   [[ -f "$SETTINGS_FILE" ]] || fail "Handy settings do not exist; finish onboarding first"
   select_shortcut
+  require_no_binding_conflict
+  warn_other_voxtype_bindings
   explain_voxtype_replacement
   confirm_voxtype_conflict
   confirm_configuration_plan
   configure_voxtype_hotkey
   configure_handy_binding
-  configure_binding
   configure_autostart
   configure_shell_widget
   validate_reload
   start_handy_hidden
   local expected_binding
   expected_binding="$(handy_shortcut_normalize "$SELECTED_SHORTCUT")"
-  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$expected_binding" ]] || fail "Handy did not register the push-to-talk shortcut"
+  [[ "$(handy_settings_binding "$SETTINGS_FILE")" == "$expected_binding" ]] || fail "Handy did not register the dictation shortcut"
   dictation_test
 
   jq -n \
@@ -695,7 +770,7 @@ main() {
     >"$INSTALL_FILE"
   maybe_remove_voxtype
   COMMITTED=true
-  say "Handy dictation setup complete. Push-to-talk: $SELECTED_SHORTCUT"
+  say "Handy dictation setup complete. Toggle shortcut: $SELECTED_SHORTCUT"
 }
 
 main "$@"

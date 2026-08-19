@@ -5,6 +5,11 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Resolved from the installed plugin directory.
 # shellcheck disable=SC1091
 source "$ROOT/lib/checkpoint.sh"
+# Resolved from the installed plugin directory.
+# shellcheck disable=SC1091
+source "$ROOT/lib/privilege.sh"
+
+privilege_require_non_root "${BASH_SOURCE[0]}" || exit 1
 
 usage() {
   echo "usage: $0 {create|verify|restore|discard|verify-current} [checkpoint-id]" >&2
