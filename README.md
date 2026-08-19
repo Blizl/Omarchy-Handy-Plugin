@@ -19,6 +19,8 @@ start recording, press again to stop.
 
 ![Handy Settings Preview](assets/handy-settings.png)
 
+DISCLAIMER: I AM NOT THE MAINTAINER FOR HANDY
+
 ## About Handy
 
 [Handy](https://github.com/cjpais/Handy) is a free and open-source desktop
